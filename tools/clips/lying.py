@@ -587,8 +587,8 @@ def lying(calf):
     key = ("lying", id(calf))
     if key not in _CACHE:
         P = _lying_body(calf)
-        P.neck = [0.0, 1.0, 1.0]
-        P.head = Vector((6.0, 4.0, -4.0))
+        P.neck = [-9.0, -10.0, -9.0]
+        P.head = Vector((18.0, 4.0, -4.0))
         extend_leg(calf, P, "LF", dx=0.015)
         extend_leg(calf, P, "RF", dx=0.045, reach=EXT_REACH - 0.02)    # right hoof tucked in under the chin
         P.kneel = {}
