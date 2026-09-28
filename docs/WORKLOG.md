@@ -85,3 +85,42 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
   - Fur is LOD0 only; shells cast no shadows.
 - `tools/calf_fur_textures.py` writes `T_Calf_FurMask` (R = length: 0 on the nose, hooves and eyes; 0.35 coat; up to 1.0 on the forehead tuft and tail switch; 16 px island padding) and a tileable `T_Fur_Noise`.
 - **UV packing:** stage B now runs `uv.pack_islands(shape_method=CONCAVE)` after smart project. UV coverage went 44% → 63% (≈1.4× texel density).
+
+### 2026-09-28: clip family `idle_graze` (Idle_LookAround, Graze_Start/Loop/End, Call)
+**What:** `tools/clips/idle_graze.py` (picked up by `tools/calf_animations.py`; `build(calf)` returns the 5 names).
+| Clip | Frames | Content |
+|---|---|---|
+| `Idle_LookAround` | loop 150 | Pose() → look left → centre → look right → Pose(); head leads neck by 5 f, weight shift/body yaw lag 7 f; ears prick toward the look + independent flicks (L f30, R f88, L f124); tail swish f58–100; 3 breaths |
+| `Graze_Start` | 42 | Pose() → GRAZE; neck leads, head extension lags; front end dips; left fore steps 6 cm forward (f12–27, as in the GiM grazing footage) |
+| `Graze_Loop` | loop 120 | GRAZE; 3 × (bite dip + jaw grab → tear jerk → 2 chews) with left/right muzzle sweeps (~9 cm) between bites; ear flicks, tail swish, 2 breaths |
+| `Graze_End` | 40 | GRAZE → Pose(); muzzle leads up, chews while rising, left fore steps back (f13–27), ears prick |
+| `Call` | 72 | Pose() → inhale/head dip → neck stretches forward and a little up, head extends, jaw ≥85 % open f22–43 (0.7 s, slight vibrato), ears back, tail lifts → Pose() |
+
+**How:** shared constant poses `stand_pose()` (= Pose()) and `graze_pose()`; per-channel monotone-cubic key curves (`Curve`, no overshoot) plus `group_blend` (a separate blend weight per body part = overlapping action) plus overlays (breathing, ear flicks, tail waves, foot step). Boundary frames return the shared poses verbatim, and the QA prints how far the raw curves are from them there (0). The standalone `__main__` prints `calf.qa`, a Calf_LOD2 mesh ground check (non-hoof / hoof per leg / nose pad / head), signed carpus/hock bend, a pop check (2nd difference of every bone, wrapped for loops) and boundary/seam diffs, then renders strips + GIFs.
+
+**Gotchas found (useful for every family):**
+- **Pose() already clamps the front hooves ~2 mm up.** The straight front legs are asked 3 mm more than 0.99 × chain at rest (the `pose_to_basis` clamp is 0.992): front fetlock z 90.6 mm vs 88.6 mm rest. With a `stance_fn`, `reach_pass` lowers the body on standing frames (dilated/smoothed over ±5 f), so the shared Pose() boundary frames would differ between clips. This family therefore passes no `stance_fn` and never raises the elbows (body z ≤ 0, no nose-up pitch).
+- **Carpus sensitivity:** the front legs are nearly straight (15° carpus bend at rest). Each 1 cm the elbow drops costs about 15° more carpus flexion. Lower the "front end" with `Torso3` (withers/neck only) and a small body pitch, not with body z.
+- **`Torso`/`Torso2` pitch moves the front legs** (`FrontShoulder.*` are children of `Torso2`). A −0.8° Torso pitch lifted the front hooves 7 mm. Keep Torso : Torso2 ≈ 1 : −1.67 so the elbow height is unchanged.
+- **Hoof flex near the ground pushes the toe INTO the ground first:** the hoof chain hangs ~22° off vertical, so small flex swings the tip down (up to 9 mm). Tie flex to lift height (flex ∝ h²).
+- Calf_LOD2 hoof vertices sit at z −1.3 cm at rest; judge hoof contact relative to each leg's rest minimum. The non-hoof minimum (1.45 cm) is the pastern skin.
+- `Pose.ears`: x + = tip forward, y + = tip down, z = twist (verified by render). `Pose.head` roll + = left ear down (the opposite of body roll).
+- The nose pad (`orig_part` 3) is the lowest head point when grazing. GRAZE nose ≈ 4 cm up, ~40 cm ahead of the front hooves.
+
+**QA** (`python3 tools/clips/idle_graze.py`, build/stage_b.blend):
+| Clip | IK gap | Planted slide | Planted hoof vs rest | Nose pad z | Carpus bend | Pops (non-ear/leg) |
+|---|---|---|---|---|---|---|
+| Idle_LookAround | 0.00 mm | 0.05 mm | ≤2.1 mm (= Pose() clamp) | 52.9–66.4 cm | 15.1–17.5° | 0.29°/f² |
+| Graze_Start | 0.02 | 0.01 | ≤2.1 | 3.05–58.3 | 15.1–58.5° (swing leg) | 0.26 |
+| Graze_Loop | 0.00 | 0.00 | 0.0 | 3.27–6.23 | 16.5–26.8° | 3.67 (tear jerk, intended) |
+| Graze_End | 0.02 | 0.08 | ≤2.1 | 3.98–63.3 | 15.1–56.8° | 0.57 |
+| Call | 0.00 | 0.01 | ≤2.1 | 50.2–76.1 | 15.1–17.6° | 1.43 |
+- Hock bend stays 51.5–54.8°. The knees always bend in the anatomical direction. Nothing goes below its rest height (non-hoof min z 1.45 cm = rest).
+- Both loop seams, and every Pose()/GRAZE boundary (Start end = Loop start, Loop end = End start, Pose() at the standing ends), are 0.0000 mm / 0.0000°.
+- Tail swish clearance to the rump/thigh verts is ≥3.5 cm.
+- Fetlock "loop seam" 60 mm on Graze_Start/End is expected (not loops; the left fore moves 6 cm).
+
+**Open:**
+- The source skinning bulges the withers when the neck pitches hard: the neck bend is spread over Torso3 + Neck1–3 to limit it; weight smoothing is still open.
+- The jaw is a single hinge, so there is no lateral chewing.
+- There are no eyelids, so there are no blinks.
