@@ -14,7 +14,7 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 | Export rig | Hooves re-parented under the lower legs for engine blending (world motion unchanged, 0.000 mm) | `anim_lib.reparent_hooves_for_export` |
 | Unity setup script | Written; can't be compiled here, needs one Unity check | `Unity/Calf/Editor/CalfSetup.cs` (menu Tools > Calf > Setup Calf Asset) |
 | Key-pose clip families | In progress (workflow: author → adversarial review → fix): idle_graze, lying, actions | `tools/clips/*.py` |
-| Fur | Not started (plan: URP shell fur via extra materials on the body submesh, LOD0 only) | see `docs/PLAN.md` |
+| Fur (optional, URP) | Shader + component + fur mask/noise textures written; needs a Unity compile check | `Unity/Calf/Fur/`, `tools/calf_fur_textures.py` |
 
 ## Log
 
@@ -77,3 +77,11 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 - **Imported clips don't key every bone.** Unkeyed bones inherit the previous clip's pose, in Blender and in Unity transitions. `complete_action` keys all missing channels at rest.
 - **Unity blending.** Hooves hang off Root in the source rig, so blend trees would blend hoof positions and leg rotations separately and the hooves would detach. `reparent_hooves_for_export` re-parents the hooves under the lower legs and re-bakes (world change 0.000 mm).
 - `tools/calf_animations.py` assembles everything into `build/stage_d.blend`. `tools/render_clip.py` renders root-tracking filmstrips/GIFs on a checker ground (makes sliding visible).
+
+### 2026-09-28: fur + UV packing
+- **URP shell fur** (`Unity/Calf/Fur/CalfShellFur.shader`, `CalfFur.cs`):
+  - Shells are extra material instances on `Calf_LOD0`. Unity redraws the LAST submesh once per extra material, so the **exporter must put `M_Calf_Body` last**.
+  - The fallback copies the body submesh to a child renderer and needs Read/Write on the model.
+  - Fur is LOD0 only; shells cast no shadows.
+- `tools/calf_fur_textures.py` writes `T_Calf_FurMask` (R = length: 0 on the nose, hooves and eyes; 0.35 coat; up to 1.0 on the forehead tuft and tail switch; 16 px island padding) and a tileable `T_Fur_Noise`.
+- **UV packing:** stage B now runs `uv.pack_islands(shape_method=CONCAVE)` after smart project. UV coverage went 44% → 63% (≈1.4× texel density).
