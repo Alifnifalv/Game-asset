@@ -353,6 +353,41 @@ for nm in ("Jaw", "Ear.L", "Ear.R"):
     bn = arm.data.bones[nm]
     print(f"bone {nm}: head {tuple(round(x,3) for x in bn.head_local)} tail {tuple(round(x,3) for x in bn.tail_local)}")
 
+# lower-leg leaf bones: glTF has no tails, the importer invented them below the ground.
+# The real chain end (fetlock) is the foot bone's head, which lies on the same line -> shorten
+# along the bone direction (rest orientation and roll unchanged, so actions are unaffected).
+bpy.ops.object.mode_set(mode="EDIT")
+for leg, foot in (("FrontLowerLeg", "IKFrontLeg"), ("BackLowerLeg", "IKBackLeg")):
+    for sd in (".L", ".R"):
+        b = eb[leg + sd]; f = eb[foot + sd]
+        d = (b.tail - b.head).normalized()
+        roll = b.roll
+        b.tail = b.head + d * (f.head - b.head).dot(d)
+        b.roll = roll
+bpy.ops.object.mode_set(mode="OBJECT")
+
+# 30 fps project; glTF keys were sampled at 1/30 s but imported on a 24 fps timeline (0.8-frame
+# spacing). Retime x1.25 so keys land on integer frames with unchanged real duration.
+sc = bpy.context.scene
+sc.render.fps = 30; sc.render.fps_base = 1.0
+for act in bpy.data.actions:
+    for l in act.layers:
+        for st in l.strips:
+            for cb in st.channelbags:
+                for fc in cb.fcurves:
+                    for kp in fc.keyframe_points:
+                        t = kp.co[0] * 1.25
+                        t = round(t) if abs(t - round(t)) < 1e-3 else t
+                        kp.handle_left[0] = t + (kp.handle_left[0] - kp.co[0]) * 1.25
+                        kp.handle_right[0] = t + (kp.handle_right[0] - kp.co[0]) * 1.25
+                        kp.co[0] = t
+    lo, hi = act.frame_range
+    act.use_frame_range = True
+    act.frame_start, act.frame_end = round(lo), round(hi)
+    act.use_cyclic = True
+    print("action", act.name, "frames", act.frame_start, act.frame_end, "@30fps")
+sc.frame_start, sc.frame_end = 0, 180
+
 # enforce <=4 influences, normalised
 for v in ob.data.vertices:
     gs = sorted([(g.group, g.weight) for g in v.groups if g.weight > 0], key=lambda t: -t[1])
