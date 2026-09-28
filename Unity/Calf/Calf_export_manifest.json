@@ -1,19 +1,19 @@
 {
  "source": "/home/user/Game-asset/build/stage_d.blend",
- "source_mtime": "2026-09-28T15:05:46",
- "exported": "2026-09-28T15:07:57",
+ "source_mtime": "2026-09-28T18:21:07",
+ "exported": "2026-09-28T18:21:07",
  "blender": "5.0.1",
  "files": {
-  "Calf.glb": 35876248,
-  "Calf.fbx": 12657836,
-  "Textures/T_CalfEye_BaseColor.png": 386190,
-  "Textures/T_Calf_AO.png": 1698827,
-  "Textures/T_Calf_BaseColor.png": 8859308,
-  "Textures/T_Calf_FurMask.png": 55258,
-  "Textures/T_Calf_MaskMap.png": 7628626,
-  "Textures/T_Calf_MetallicSmoothness.png": 5988218,
-  "Textures/T_Calf_Normal.png": 13881065,
-  "Textures/T_Calf_Roughness.png": 3930587,
+  "Calf.glb": 14299936,
+  "Calf.fbx": 14019340,
+  "Textures/T_CalfEye_BaseColor.png": 356468,
+  "Textures/T_Calf_AO.png": 1363336,
+  "Textures/T_Calf_BaseColor.png": 7428316,
+  "Textures/T_Calf_FurMask.png": 52996,
+  "Textures/T_Calf_MaskMap.png": 6461301,
+  "Textures/T_Calf_MetallicSmoothness.png": 5144956,
+  "Textures/T_Calf_Normal.png": 16040873,
+  "Textures/T_Calf_Roughness.png": 3279866,
   "Textures/T_Fur_Noise.png": 65917
  },
  "glb": {
@@ -21,7 +21,55 @@
    "CalfRig",
    "Calf_LOD0"
   ],
-  "textures_wired": []
+  "textures_wired": [],
+  "texture_max_res": 2048,
+  "textures_reduced": [
+   {
+    "image": "T_Calf_BaseColor",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   },
+   {
+    "image": "T_Calf_Roughness",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   },
+   {
+    "image": "T_Calf_Normal",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   },
+   {
+    "image": "T_Calf_AO",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   }
+  ],
+  "double_sided": false
  },
  "armature": "CalfRig",
  "fps": 30.0,
@@ -157,28 +205,24 @@
  "weights": {
   "Calf_LOD0": {
    "verts": 23420,
-   "max_before": 7,
+   "max_before": 4,
    "max_after": 4,
-   "over_limit": 2902,
+   "over_limit": 0,
    "zero_or_foreign_removed": 0,
-   "max_dropped_weight": 0.17141889908476843,
+   "max_dropped_weight": 0.0,
    "unweighted": 0,
-   "method": "lsq-refit",
-   "sampled_max_error_mm_truncate": 36.229,
-   "sampled_max_error_mm_refit": 23.259,
+   "method": "truncate",
    "ngons_triangulated": 0
   },
   "Calf_LOD1": {
    "verts": 5868,
-   "max_before": 7,
+   "max_before": 4,
    "max_after": 4,
-   "over_limit": 516,
+   "over_limit": 0,
    "zero_or_foreign_removed": 0,
-   "max_dropped_weight": 0.17141889908476843,
+   "max_dropped_weight": 0.0,
    "unweighted": 0,
-   "method": "lsq-refit",
-   "sampled_max_error_mm_truncate": 33.336,
-   "sampled_max_error_mm_refit": 18.903,
+   "method": "truncate",
    "ngons_triangulated": 0
   },
   "Calf_LOD2": {
@@ -189,9 +233,40 @@
    "zero_or_foreign_removed": 0,
    "max_dropped_weight": 0.0,
    "unweighted": 0,
-   "method": "lsq-refit",
+   "method": "truncate",
    "ngons_triangulated": 0
   }
+ },
+ "weight_fit": {
+  "method": "none (source already within the influence limit)",
+  "frames_total": 1713,
+  "actions": [
+   "Call",
+   "Death",
+   "Death_Lying",
+   "Eating",
+   "Gallop",
+   "Gallop_RM",
+   "GetUp",
+   "Graze_End",
+   "Graze_Loop",
+   "Graze_Start",
+   "HeadShake",
+   "Idle",
+   "Idle_LookAround",
+   "Leap",
+   "LieDown",
+   "Lying_Idle",
+   "Stand",
+   "Trot",
+   "Trot_RM",
+   "TurnLeft90",
+   "TurnRight90",
+   "Walk",
+   "Walk_RM",
+   "Walk_Slow",
+   "Walk_Slow_RM"
+  ]
  },
  "max_influences": 4,
  "takes": [
@@ -210,6 +285,15 @@
    "frame_end": 70.0,
    "frames": 71,
    "seconds": 2.3333333333333335,
+   "cyclic": false,
+   "root_motion": true
+  },
+  {
+   "name": "Death_Lying",
+   "frame_start": 0.0,
+   "frame_end": 60.0,
+   "frames": 61,
+   "seconds": 2.0,
    "cyclic": false,
    "root_motion": true
   },
@@ -331,6 +415,15 @@
    "root_motion": false
   },
   {
+   "name": "Stand",
+   "frame_start": 0.0,
+   "frame_end": 36.0,
+   "frames": 37,
+   "seconds": 1.2,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
    "name": "Trot",
    "frame_start": 0.0,
    "frame_end": 16.0,
@@ -351,18 +444,18 @@
   {
    "name": "TurnLeft90",
    "frame_start": 0.0,
-   "frame_end": 48.0,
-   "frames": 49,
-   "seconds": 1.6,
+   "frame_end": 56.0,
+   "frames": 57,
+   "seconds": 1.8666666666666667,
    "cyclic": false,
    "root_motion": true
   },
   {
    "name": "TurnRight90",
    "frame_start": 0.0,
-   "frame_end": 48.0,
-   "frames": 49,
-   "seconds": 1.6,
+   "frame_end": 56.0,
+   "frames": 57,
+   "seconds": 1.8666666666666667,
    "cyclic": false,
    "root_motion": true
   },
@@ -381,6 +474,24 @@
    "frame_end": 24.0,
    "frames": 25,
    "seconds": 0.8,
+   "cyclic": true,
+   "root_motion": true
+  },
+  {
+   "name": "Walk_Slow",
+   "frame_start": 0.0,
+   "frame_end": 36.0,
+   "frames": 37,
+   "seconds": 1.2,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Walk_Slow_RM",
+   "frame_start": 0.0,
+   "frame_end": 36.0,
+   "frames": 37,
+   "seconds": 1.2,
    "cyclic": true,
    "root_motion": true
   }
