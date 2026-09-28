@@ -367,7 +367,10 @@ def triangulate_ngons(obj):
 def copy_textures(tex_dir, out_tex):
     if not tex_dir or not os.path.isdir(tex_dir):
         return {}
-    files = sorted(f for f in os.listdir(tex_dir) if os.path.splitext(f)[1].lower() in IMG_EXT)
+    # authoring intermediates that no Unity material uses (16-bit fur height used only for the normal bake)
+    skip = {"T_Calf_Height"}
+    files = sorted(f for f in os.listdir(tex_dir)
+                   if os.path.splitext(f)[1].lower() in IMG_EXT and os.path.splitext(f)[0] not in skip)
     if not files:
         return {}
     os.makedirs(out_tex, exist_ok=True)
