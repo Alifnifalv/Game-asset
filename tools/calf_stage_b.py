@@ -30,7 +30,7 @@ P = dict(                # all in ORIGINAL model units (1 unit ~= 22.5 cm after 
               "FF": 0.86, "FFB": 0.86, "BackLeg": 0.88},
     neck_thin=1.0, tail_thin=0.75,
     neck_deepen=1.28,   # deeper throat/brisket line under the neck bones
-    eye_radius_mul=1.12, eye_protrude=0.45, eye_open=1.55, eye_open_ring=1.2,
+    eye_radius_mul=1.12, eye_protrude=0.32, eye_open=1.55, eye_open_ring=1.2,   # protrude 0.45 showed a glossy rim past the lids
     meters=0.225,        # withers ~1.0 m
     jaw_hinge=(-4.0, 3.15), jaw_front=(-5.05, 2.95), jaw_soft=0.09,   # (y, z) mouth line, original units
     ear_root_x=0.52, ear_soft=0.13,
@@ -409,6 +409,13 @@ for act in bpy.data.actions:
     act.use_cyclic = True
     print("action", act.name, "frames", act.frame_start, act.frame_end, "@30fps")
 sc.frame_start, sc.frame_end = 0, 180
+
+# smoother skin across withers/neck base: the source weights crease the crest when the neck pitches down
+# (grazing). Laplacian smoothing on the cage (numpy; the operator's poll fails headless).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import weight_utils
+weight_utils.smooth_groups(ob, ["Torso2", "Torso3", "Neck1", "Neck2", "Neck3", "FrontShoulder.L", "FrontShoulder.R"],
+                           factor=0.5, iterations=6)
 
 # enforce <=4 influences, normalised
 for v in ob.data.vertices:
