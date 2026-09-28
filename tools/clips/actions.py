@@ -46,8 +46,9 @@ Conventions verified on this rig (FK probes + renders):
   Pose.flex + = toe back (fetlock flexion; reduces the dorsal fetlock angle); Pose.ears x + = tip forward, y + =
   tip down (droop), z = twist; Pose.head roll + = left ear down; body_rot roll + = right side down; spine roll + =
   LEFT side down; tail side + = tail tip toward the calf's RIGHT (-X) (= down when lying on the right side), tail
-  lift + = tip swings back (+Y). Pose() lifts the straight front hooves ~2 mm (reach clamp), so standing clips never
-  raise the elbows (no body z > 0 / no roll / no nose-up pitch while all four feet are planted).
+  lift + = tip swings back (+Y). Pose() == rest (reach clamp 0.9985 x chain > the fore legs' rest reach 0.996) and a
+  planted fore leg has only ~1 mm of slack, so standing clips never raise the elbows (no body z > 0 / no roll / no
+  nose-up pitch while all four feet are planted).
 
 Library extensions (kept here, anim_lib.py is shared): make_clip_ex() = Calf.make_clip without the reach pass,
 plus basis_hook (re-orient hoof bones about their head before keying; the leg IK targets the head only) and
@@ -395,14 +396,18 @@ D_SQUAT = 0.03                       # legs give by this much (along the body's 
 D_REFLEX = (40, 45, 53)              # post-mortem stretch of the upper hind leg (in the air, above the lower leg)
 D_FLEX = {"LF": 25.0, "LH": 20.0}    # relaxed fetlock flex of the limp upper legs (dead pose)
 
-# dead pose (body / head / ears were tuned for the ground contact: lower ear folded back, right cheek on the ground)
+# dead pose (body / head / ears were tuned for the ground contact: lower ear folded back, right cheek on the ground).
+# Retuned for the final stage-B head (head_scale 0.97, smaller and narrower than the 1.22 head the pose was made
+# for, which left the dead head 3.4 cm above the ground): the neck bends 1.75 deg more per bone toward the ground
+# (neck_yaw - = to the calf's right = down on the right side) and the head rolls 6 deg so the right cheek lies flat
+# (Calf_LOD2 head min z +0.04 cm, Calf_LOD0 +0.24 cm; ~900 LOD0 head verts within 1 cm of the ground).
 DEAD = dict(
     body_dy=0.02, body_dz=-0.50,
     body_rot=V(2.0, 88.0, -4.0),
     spine={"Back": (0.0, 3.0, 0.0), "Torso": (0.0, 2.0, 0.0), "Torso3": (4.0, -3.0, 0.0)},
     neck=[8.0, 8.0, 6.0],
-    neck_yaw=[-2.0, -3.0, -3.0],
-    head=V(8.0, -4.0, 0.0),
+    neck_yaw=[-3.75, -4.75, -4.75],
+    head=V(8.0, -4.0, 6.0),
     jaw=6.0,
     ears={"L": V(-75.0, -20.0, 0.0), "R": V(-50.0, -40.0, 0.0)},
     # tail lies on the ground behind the rump, clear of the lower hind leg (lift = away from the thighs)
@@ -520,10 +525,10 @@ class DeathModel:
                             (24, [-3.0, -5.0, -6.0]), (IMP - 1, [-4.0, -6.0, -7.0]), (IMP + 3, [9.0, 9.0, 7.0]),
                             (IMP + 7, [6.0, 6.0, 5.0]), (IMP + 13, DEAD["neck"]), (H, DEAD["neck"])])
         C["neck_yaw"] = _vkeys([(0, [0.0, 0.0, 0.0]), (8, [1.0, 1.5, 2.0]), (22, [2.0, 3.0, 3.0]),
-                                (IMP - 1, [1.0, 1.0, 0.0]), (IMP + 3, [-2.5, -3.5, -3.5]), (IMP + 7, [-1.0, -1.5, -1.5]),
+                                (IMP - 1, [1.0, 1.0, 0.0]), (IMP + 3, [-4.7, -5.7, -5.7]), (IMP + 7, [-3.3, -3.8, -3.8]),
                                 (IMP + 13, DEAD["neck_yaw"]), (H, DEAD["neck_yaw"])])
         C["head"] = _vkeys([(0, [0.0, 0.0, 0.0]), (3, [-6.0, 0.0, 0.0]), (8, [4.0, 2.0, -3.0]), (13, [2.0, 3.0, -4.0]),
-                            (IMP - 5, [-4.0, 0.0, 0.0]), (IMP + 3, [9.0, -5.0, 0.0]), (IMP + 7, [6.0, -2.0, 0.0]),
+                            (IMP - 5, [-4.0, 0.0, 0.0]), (IMP + 3, [9.0, -5.0, 5.0]), (IMP + 7, [6.0, -2.0, 5.0]),
                             (IMP + 13, list(DEAD["head"])), (H, list(DEAD["head"]))])
         C["jaw"] = Curve([(0, 0.0), (3, 7.0), (8, 3.0), (13, 4.0), (IMP - 2, 2.0), (IMP + 3, 9.0), (IMP + 10, DEAD["jaw"]),
                           (H, DEAD["jaw"])])
@@ -799,7 +804,10 @@ DL_LIMP = {"LF": (12, 30), "RF": (16, 32), "LH": (15, 37), "RH": (17, 37)}   # f
 DL_LIFT = {"LF": 0.09, "RF": 0.0, "LH": 0.09, "RH": 0.035}  # the rolling trunk carries the upper legs up
 DL_HIND_END = V(0.16, 0.14, 0.0)      # lower (right) hind: final spot = lying spot + this (slides out, unfolding)
 DL_UPPER_LH = V(0.07, -0.17, 0.05)    # upper hind relative to the lower one (in front of it, clear of it)
-DL_FEMUR_END = {"LH": 18.0, "RH": 24.0}
+# femur swing at the end (+ = foot forward). The upper (left) hind keeps its thigh forward (LYING: 55 deg): at 18 deg
+# its gaskin / hock lay on the lower hind's cannon (bone-capsule clearance only 5 mm at f37-60, the legs merged in
+# renders); at 40 deg the upper leg lies in front of the lower one (clearance 34 mm, no LOD2 limb intersections)
+DL_FEMUR_END = {"LH": 40.0, "RH": 24.0}
 DL_POLE = (10, 26)                    # IK poles: lying family rule -> Body-parented (as Death / dead_pose)
 DL_HOOF = (10, 32)                    # hoof orientation: lying (flex about X) -> follows the cannon (limp)
 DL_FLEX = {"LF": 25.0, "RF": 20.0, "LH": 20.0, "RH": 15.0}    # relaxed fetlock flex of the limp legs (deg)
@@ -852,9 +860,10 @@ class DeathLyingModel:
                             (26, [0.0, 1.0, 0.0]), (b + 2, [10.0, 10.0, 8.0]), (b + 6, [7.0, 7.0, 5.0]),
                             (b + 12, list(end.neck)), (DL_HOLD, list(end.neck))])
         C["neck_yaw"] = VCurve([(0, list(ly.neck_yaw)), (16, [2.0, 2.0, 2.0]), (b, [0.0, 0.0, 0.0]),
-                                (b + 8, list(end.neck_yaw)), (DL_HOLD, list(end.neck_yaw))])
+                                (b + 2, [-3.5, -4.5, -4.5]), (b + 6, [-3.3, -3.8, -3.8]),
+                                (b + 12, list(end.neck_yaw)), (DL_HOLD, list(end.neck_yaw))])
         C["head"] = VCurve([(0, list(ly.head)), (4, [-2.0, 4.0, -4.0]), (9, [7.0, 4.0, -4.0]), (16, [9.0, 2.0, -2.0]),
-                            (26, [4.0, 0.0, 0.0]), (b + 2, [10.0, -5.0, 0.0]), (b + 6, [7.0, -2.0, 0.0]),
+                            (26, [4.0, 0.0, 0.0]), (b + 2, [10.0, -5.0, 5.0]), (b + 6, [7.0, -2.0, 5.0]),
                             (b + 12, list(end.head)), (DL_HOLD, list(end.head))])
         C["jaw"] = Curve([(0, ly.jaw), (4, 10.0), (10, 4.0), (b - 2, 3.0), (b + 2, 9.0), (b + 9, end.jaw), (DL_HOLD, end.jaw)])
         C["earL"] = VCurve([(0, list(ly.ears["L"])), (4, [-30.0, -5.0, 6.0]), (16, [-20.0, 20.0, 0.0]),
@@ -910,15 +919,18 @@ class DeathLyingModel:
         return P
 
     def _contact(self):
-        """per-frame trunk height: lowest Calf_LOD2 trunk vertex (not weighted to the leg chains / hooves) at
+        """per-frame trunk height: lowest Calf_LOD2 trunk vertex (not weighted to the leg chains / hooves, nor to
+        the head / jaw / ears: the head rests on the ground by its own keys and must not lift the trunk) at
         DL_CONTACT while the calf rolls; faded to 0 at f8 and at DL_HOLD (exact shared poses there)"""
         calf = self.calf
         ob = bpy.data.objects.get("Calf_LOD2")
         if ob is None:
             return
         legb = {n for d in LEGS.values() for n in d["chain"] + (d["foot"], d["toe"])}
+        headb = {"Head", "Jaw", "Ear.L", "Ear.R"}
         gi = {g.index: g.name for g in ob.vertex_groups}
-        trunk = np.array([sum(g.weight for g in v.groups if gi.get(g.group) in legb) < 0.2 for v in ob.data.vertices])
+        trunk = np.array([sum(g.weight for g in v.groups if gi.get(g.group) in legb) < 0.2 and
+                          sum(g.weight for g in v.groups if gi.get(g.group) in headb) < 0.5 for v in ob.data.vertices])
         mods = [m for m in ob.modifiers if m.type == "ARMATURE"]
         arm = calf.arm
         if arm.animation_data:
@@ -1326,7 +1338,9 @@ def build(calf, only=None):
                 m.q_est = dict(m.q_new)
             make_clip_ex(calf, name, N, fn, loop=False, basis_hook=hook, post_bake=post)
             if m is not None and m.q_est:
-                d = max((math.degrees(m.q_est[k].rotation_difference(m.q_new[k]).angle), k) for k in m.q_est)
+                # quaternion angle is in [0, 360): q and -q are the same rotation, so fold it to [0, 180]
+                d = max((180.0 - abs(180.0 - math.degrees(m.q_est[k].rotation_difference(m.q_new[k]).angle)), k)
+                        for k in m.q_est)
                 print(f"  {name} pass {it + 1}: limp-hoof orientation, baked vs assumed {d[0]:.3f} deg {d[1]}")
         made.append(name)
     return made

@@ -42,7 +42,7 @@ Rig handling that differs from anim_lib.Calf.make_clip (see make_clip_ex)
     (`solve_femur`) and hind joint limits (`fit_femur`).
 
 Joint limits used here (angle about the side axis; 0 = straight; the rest pose values in brackets)
-  fore fetlock >= -65 deg when loaded [-31]; carpus <= 25 deg on a loaded standing leg [15]; stifle bend <= 140 deg [60];
+  fore fetlock >= -65 deg when loaded [-31]; carpus <= 25 deg on a loaded standing leg [10.4]; stifle bend <= 140 deg [60];
   hock bend >= -150 deg [-52].
 """
 import copy, math, os, sys
@@ -352,8 +352,8 @@ def reach_guard(calf, P, legs, cap=0.0):
     toward the elbow and the planted hoof would lift/slide). Where the keyed elbow-fetlock distance d exceeds the
     cap D0, lower the body (z; + roll for two legs) to a C1 soft limit: d' = d - (d - D0)^2 / (4 w) for
     d < D0 + 2 w, else D0 + w. D0 = lerp(rest distance, D_STAND x chain, cap): at cap 0 standing frames at rest
-    are unchanged; at cap 1 a loaded hoof stays below the library's 0.992 x chain clamp (it rests on its real
-    contact point instead of being held ~2 mm up by the clamp, as it is in Pose())."""
+    are unchanged; at cap 1 a loaded hoof stays below the library's clamp (0.9985 x chain since c4fbcaa; it was
+    0.992, when Pose() held the fore hooves ~2 mm up)."""
     over = {}
     for leg in legs:
         d = (fk(calf, P)[elbow_name(leg)].translation - foot_world(calf, P, leg)).length
@@ -503,7 +503,7 @@ def stand():
 
 # (tail values re-expressed for anim_lib's fixed tail swing axis, review A10: same tail shape as before, 0.000 mm)
 LYING_TAIL = ((0.0, -8.0), (0.0, -5.0), (0.0, 0.0), (0.0, 5.0), (0.85, 9.96), (9.03, 23.58), (19.08, 24.09))
-D_STAND = 0.990         # loaded standing fore leg: elbow-fetlock distance / chain length (rest 0.996, library clamp 0.992)
+D_STAND = 0.990         # loaded standing fore leg: elbow-fetlock distance / chain length (rest 0.996, library clamp 0.9985)
 EXT_REACH = 0.982       # fore leg stretched forward while lying (carpus ~20 deg, knee slightly up)
 EXT_FLEX = -48.0        # its hoof points forward, sole facing forward/down
 LY_FEET = {"LH": (0.26, 0.53), "RH": (0.00, 0.53)}     # lying hind fetlocks (x, y); the left hind lies on top
@@ -583,7 +583,7 @@ def lying_folded(calf):
 def lying(calf):
     """LYING (LieDown end == Lying_Idle loop pose == GetUp start): sternal recumbency, both fore legs stretched
     forward on the ground (as in the GiM reference), pelvis rolled onto the right hip, hind legs folded to the left,
-    head up."""
+    head held up level with / above the back (GiM; neck raised, head pitched down to keep the face near vertical)."""
     key = ("lying", id(calf))
     if key not in _CACHE:
         P = _lying_body(calf)
@@ -598,8 +598,9 @@ def lying(calf):
 
 # ---------------------------------------------------------------------------- LieDown key poses
 def sniff(calf):
-    """standing, nose to the ground; the head drop comes from the neck, the elbows keep their standing distance to
-    the hooves (loaded carpi stay near their rest bend)"""
+    """standing, nose lowered toward the spot (the muzzle reaches the ground later, at the kneeling sniff kn_low in
+    lie_down); the head drop comes from the neck, the elbows keep their standing distance to the hooves (loaded
+    carpi stay near their rest bend)"""
     P = stand()
     P.body_off = Vector((0.0, 0.02, 0.0))
     P.body_rot = Vector((1.0, 0.0, 0.0))
@@ -702,9 +703,13 @@ def lie_down(calf, N=150):
     S = stand()
     sn, rb, kl, kn = sniff(calf), rock_back(calf), kneel_left(calf), kneel(calf)
     hl, rd, lf, ly = hind_lowering(calf), rump_down(calf), lying_folded(calf), lying(calf)
-    kn_low = cp(kn); kn_low.neck = [6.0, 8.0, 6.0]; kn_low.neck_yaw = [-2.0, -2.0, -1.0]; kn_low.head = Vector((10.0, -3.0, 2.0))
+    # kneeling sniff: the muzzle comes down to ~4 cm above the ground (f56); the head is already on its way down when
+    # the right carpus lands (f48), so the dip into the sniff is no faster than before (trunk/head accel 12 mm/f^2)
+    kn_key = cp(kn); kn_key.neck = [5.0, 7.0, 6.0]; kn_key.head = Vector((9.0, -1.0, 1.0))
+    kn_low = cp(kn); kn_low.neck = [11.0, 12.0, 11.0]; kn_low.neck_yaw = [-2.0, -2.0, -1.0]; kn_low.head = Vector((14.0, -3.0, 2.0))
     lf_look = cp(lf); lf_look.neck = [4.0, 4.0, 3.0]; lf_look.neck_yaw = [4.0, 5.0, 4.0]; lf_look.head = Vector((8.0, 6.0, -4.0))
-    ly_turn = cp(ly); ly_turn.neck = [2.0, 3.0, 2.0]; ly_turn.neck_yaw = [-2.0, -3.0, -2.0]; ly_turn.head = Vector((7.0, -2.0, -2.0))
+    # the head comes up over f112-150 to the high LYING head (not all in the last 16 frames)
+    ly_turn = cp(ly); ly_turn.neck = [-3.0, -3.0, -3.0]; ly_turn.neck_yaw = [-2.0, -3.0, -2.0]; ly_turn.head = Vector((11.0, -2.0, -2.0))
     rest = (V0.copy(), 0.0)
     toeL, toeR = pivot_point(calf, "LF"), pivot_point(calf, "RF")
     hind_t0 = {"LH": 85, "RH": 86}
@@ -722,7 +727,7 @@ def lie_down(calf, N=150):
     lo = A.blend_pose(sn, rb, 0.5); lo.auto_top = False
     lo.feet["LF"], lo.flex["LF"] = foot_on_pivot(calf, "LF", toeL, 22.0)
     solve_body(calf, lo, [shell_res(calf, "RF", D_STAND)], ["z"])
-    body = [(0, S, "stop"), (14, sn), (19, lo), (24, rb, "stop"), (34, kl, "stop"), (48, kn, "stop"), (56, kn_low, "stop"),
+    body = [(0, S, "stop"), (14, sn), (19, lo), (24, rb, "stop"), (34, kl, "stop"), (48, kn_key, "stop"), (56, kn_low, "stop"),
             (70, hl), (84, rd), (93, settle), (98, lf, "stop"), (114, lf_look), (134, ly_turn), (N, ly, "stop")]
     toeL, toeR = pivot_point(calf, "LF"), pivot_point(calf, "RF")
     lift = foot_on_pivot(calf, "LF", toeL, 26.0); lift = (lift[0] + Vector((0.0, 0.015, 0.035)), 34.0)
@@ -757,7 +762,7 @@ def get_up(calf, N=150):
     S, ly, lf = stand(), lying(calf), lying_folded(calf)
     rest = (V0.copy(), 0.0)
     gat = {leg: (Vector((x, y, rest_foot(calf, leg).z)) - rest_foot(calf, leg), 0.0) for leg, (x, y) in GATHER.items()}
-    prep = cp(ly); prep.neck = [-4.0, -4.0, -2.0]; prep.head = Vector((0.0, 1.0, -2.0))
+    prep = cp(ly); prep.neck = [-11.0, -12.0, -10.0]; prep.head = Vector((12.0, 1.0, -2.0))     # head up a little more
     prep.ears = {"L": Vector((10.0, 0.0, -10.0)), "R": Vector((10.0, 0.0, -10.0))}
     folded = cp(lf); folded.neck = [2.0, 2.0, 1.0]; folded.head = Vector((4.0, 0.0, 0.0)); folded.ears = prep.ears
     gather = cp(lf)

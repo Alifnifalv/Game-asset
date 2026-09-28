@@ -18,9 +18,11 @@ Clips (30 fps; hooves planted unless a step is listed)
                                extends nose-forward, jaw opens f16-22, >= 85 % open f22-43 (0.7 s) with a slight
                                vibrato, closes by f50, ears back, tail lifts -> Pose().
 
-GRAZE pose (graze_pose): body pitch 1.8 deg nose-down + 6 mm lower, withers (Torso3) 7 deg down, neck 22.7/26.2/23.2
-deg, head extended -36 deg (face ~83 deg nose-down), left fore 6 cm forward. Nose pad ~1 cm above the ground
-(Calf_LOD0; the bites dip it onto the grass), ~30 cm ahead of the front hooves (review A12a: was ~4 cm up).
+GRAZE pose (graze_pose): body pitch 1.8 deg nose-down + 6 mm lower, withers (Torso3) 8 deg down, neck 26.5/29.5/26.5
+deg, head extended -43 deg (Head bone ~92 deg below horizontal: the face hangs about vertical), left fore 6 cm forward.
+Nose pad 2.6-4.3 cm above the ground through Graze_Loop on Calf_LOD2 (2.9-4.6 cm on LOD0; lowest in the bites, highest
+in the side sweeps), >= 2.8 cm in Graze_Start/End, ~13 cm ahead of the stepped left fore toe. Retuned for the final,
+smaller head (stage B head_scale 0.97): the old neck 22.7/26.2/23.2, head -36, Torso3 7 left it 6.9-9.0 cm up.
 
 Shared constant poses (module level): stand_pose() (== Pose()) and graze_pose() (GRAZE). Every non-loop clip starts
 and ends EXACTLY at those (pose functions return them verbatim on the boundary frames; overlays are 0 there).
@@ -28,10 +30,10 @@ and ends EXACTLY at those (pose functions return them verbatim on the boundary f
 Ear convention of anim_lib.Pose.ears (verified with renders): x + = ear tip forward, y + = ear tip down (droop),
 z = twist about the ear's long axis. Head roll + = left ear down (opposite of body_rot roll).
 
-Leg reach: the rest pose already asks the straight front legs for 3 mm more than 0.99 x chain, so the library clamps
-the front hooves ~2 mm up in Pose(). These clips never raise the elbows above rest (body z <= 0, no front-up pitch),
-so the front hooves stay at or below their Pose() height, and make_clip is called WITHOUT stance_fn: the body-vault
-pass would otherwise move the shared Pose() boundary frames.
+Leg reach: anim_lib clamps foot targets at 0.9985 x chain and vaults the body above 0.997 x chain; the straight front
+legs rest at 0.996, so Pose() == rest (rest carpus 10.4 deg). A planted fore leg has ~0.5 mm of slack before the vault
+and ~1.2 mm before the clamp, so these clips never raise the elbows above rest (body z <= 0, no front-up pitch).
+make_clip is called without stance_fn.
 
 Standalone: python3 tools/clips/idle_graze.py [--in build/stage_b.blend] [--out-dir DIR] [--no-render] [--only a,b]
                                               [--gif-step 3] [--res 320] [--samples 6] [--sides left,front]
@@ -207,8 +209,9 @@ def stand_pose():
     return Pose()
 
 
-# GRAZE: tuned so the nose pad is ~1 cm above the ground (LOD0 skinning) and reaches it in the bites,
-# the front end ~1.5 cm lower (body pitch + withers), carpi only slightly more flexed than at rest.
+# GRAZE: tuned on the final stage B (smaller head) so the nose pad hangs 2.5-5 cm above the ground through Graze_Loop
+# (LOD0 and LOD2 skinning; lowest in the bites) with the face about vertical, the front end ~1.5 cm lower (body pitch +
+# withers), carpi only slightly more flexed than at rest.
 GRAZE_FEET = {"LF": V(0.0, -0.06, 0.0)}           # left fore stepped forward 6 cm (Graze_Start/End step it)
 
 
@@ -216,10 +219,10 @@ def graze_pose():
     P = Pose()
     P.body_off = V(0.0, 0.0, -0.006)
     P.body_rot = V(1.8, 0.0, 0.0)                  # nose down 1.8 deg about the COG
-    P.spine = {"Torso": (-0.6, 0.0, 0.0), "Torso3": (7.0, 0.0, 0.0)}   # withers follow the neck down
-    P.neck = [22.7, 26.2, 23.2]                    # (was 20/23/20: the muzzle hung 3.8-6.6 cm above the grass, A12a)
+    P.spine = {"Torso": (-0.6, 0.0, 0.0), "Torso3": (8.0, 0.0, 0.0)}   # withers follow the neck down
+    P.neck = [26.5, 29.5, 26.5]                    # (was 22.7/26.2/23.2 for the old, bigger head: nose pad 6.9-9.0 cm up)
     P.neck_yaw = [1.0, 1.5, 2.0]
-    P.head = V(-36.0, 3.0, 2.0)                    # head extends against the neck: face ~83 deg nose-down
+    P.head = V(-43.0, 3.0, 2.0)                    # head extends against the neck: Head bone ~92 deg below horizontal
     P.jaw = 0.0
     P.ears = {"L": V(-6.0, 14.0, -4.0), "R": V(-4.0, 12.0, -4.0)}      # relaxed, drooping out/back
     P.tail = [(0.44, -1.0), (0.86, 0.0), (0.04, 0.0), (-0.47, 0.0), (0.04, 0.0), (0.2, -0.01), (0.15, -0.01)]   # (A10 axis)

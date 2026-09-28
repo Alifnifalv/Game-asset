@@ -11,14 +11,15 @@ Always pass both flags for a QA run: `--render none` (the default is `all`, ~10 
 
 History: first version 9dd402a; adversarial review e8bc810 (3 major, 2 minor); this rework fixes all five findings
 (see "Review findings" below). The module was largely rewritten; the framework (Hermite body/foot tracks, knee lock,
-`solve_body`) is kept.
+`solve_body`) is kept. Final multi-lens review (after checkpoint 01): the LYING head is held up (L5) and the head keys
+around it were retuned for the smaller stage-B head (see "Final review retune" below).
 
 ## Clips (30 fps, no root motion: Root stays at the origin)
 | Clip | Frames | Content |
 |---|---|---|
-| `LieDown` | 0-150, one-shot | `Pose()` -> sniff (f14) -> rock back (f24, stop) -> left fore rolls onto its toe, lifts (f19) and folds; chest drops onto the left carpus (f34) while the loaded right fore rolls onto its toe -> right fore lifts (f36) and its carpus goes down (f48) -> kneel, head low (f56) -> hindquarters sink onto the right hip, hocks back and down, hind hooves planted (f56-84) -> hind hooves lifted into the lying spots (f85-98), chest settles (f98) -> left fore stretched forward (f102-122), right fore (f112-132) -> head up -> `LYING` (f150) |
+| `LieDown` | 0-150, one-shot | `Pose()` -> sniff (f14) -> rock back (f24, stop) -> left fore rolls onto its toe, lifts (f19) and folds; chest drops onto the left carpus (f34) while the loaded right fore rolls onto its toe -> right fore lifts (f36) and its carpus goes down (f48) -> kneel, sniff: muzzle ~4 cm above the ground (f56) -> hindquarters sink onto the right hip, hocks back and down, hind hooves planted (f56-84) -> hind hooves lifted into the lying spots (f85-98), chest settles (f98) -> left fore stretched forward (f102-122), right fore (f112-132) -> head comes up (f114-150) -> `LYING` (f150) |
 | `Lying_Idle` | 0-150, loop | `LYING` + 3 breaths, 8 cud chews (jaw, pause while listening), look left / down / right, ear flicks, one tail flick (unchanged overlays) |
-| `GetUp` | 0-150, one-shot | `LYING` -> head up -> left fore folded back under onto its knee (f4-22), right (f10-28) -> hind hooves lifted and gathered beside/behind the belly, pelvis unrolls, rump starts rising (f26-40) -> lunge forward on the knees, rump up (f40-62) -> each hind hoof steps forward under the hips (f56-70) -> roll onto the right knee, left fore steps forward and plants toe first at its rest spot (f70-84), heel down by f104 -> push (f92) -> right fore steps, toe first (f92-106), heel down by f120 -> rise (f110), up (f126), settle -> `Pose()` (f150) |
+| `GetUp` | 0-150, one-shot | `LYING` -> head up a little more (f8) -> left fore folded back under onto its knee (f4-22), right (f10-28) -> hind hooves lifted and gathered beside/behind the belly, pelvis unrolls, rump starts rising (f26-40) -> lunge forward on the knees, rump up (f40-62) -> each hind hoof steps forward under the hips (f56-70) -> roll onto the right knee, left fore steps forward and plants toe first at its rest spot (f70-84), heel down by f104 -> push (f92) -> right fore steps, toe first (f92-106), heel down by f120 -> rise (f110), up (f126), settle -> `Pose()` (f150) |
 
 Shared poses: `stand()` (== `Pose()`), `lying(calf)` (LYING), `lying_folded(calf)` (lying body, fore legs folded under).
 Seams are exact (0.000 mm / 0.000 deg): LieDown end = Lying_Idle start/end = GetUp start; LieDown start and GetUp end
@@ -27,7 +28,8 @@ equal a `make_clip(Pose())` frame.
 `LYING` = sternal recumbency: the chest upright on the sternum, **both fore legs stretched forward on the ground** (the
 right hoof tucked in under the chin, as in the GiM reference 28-40 s), the pelvis rolled onto the right hip (`Back`
 roll -14 deg with a `Torso` counter-roll), hind legs folded to the left (left hind on top), tail hanging with a tip
-curl. The lying body is `LY_B` = 0.40 m behind the standing body.
+curl, and the **head held up** level with / above the back as in GiM (neck -9/-10/-9 deg, head pitch 18 deg: Head
+bone midpoint z 0.557 m, back top 0.58 m, poll/ears up to 0.75 m). The lying body is `LY_B` = 0.40 m behind the standing body.
 
 ## How it works (read before changing it)
 - **Poles are keyed per frame** (`make_clip_ex` = anim_lib `make_clip` without the reach pass plus pole keys; the
@@ -86,7 +88,7 @@ curl. The lying body is `LY_B` = 0.40 m behind the standing body.
 - The front `FrontUpperLeg` weights cover a 16 x 27 cm block of the brisket, so a fully folded cannon (carpus 156 deg)
   disappears inside the forearm. Folded fore legs are fine in transitions, but a held pose should stretch them.
 
-## QA (`python3 tools/clips/lying.py --render none --scratch <scratch>`, checkpoint 01: build/stage_b.blend of 2026-09-28 15:00, HEAD 137fb8b)
+## QA (`python3 tools/clips/lying.py --render none --scratch <scratch>`, final-review stage B: build/stage_b.blend of 2026-09-28 17:46, after the L5 retune)
 | Check | LieDown | Lying_Idle | GetUp |
 |---|---|---|---|
 | IK gap / planted fetlock slide | 0.05 / 0.00 mm | 0.00 / 0.00 mm | 0.04 / 0.00 mm |
@@ -96,10 +98,49 @@ curl. The lying body is `LY_B` = 0.40 m behind the standing body.
 | Standing loaded carpus max (limit 25; rest 10.4) | 23.9 (lift-off) | - | 10.6 |
 | Stifle bend max (limit 140; rest 60) | 135.5 | 134.0 | 134.0 |
 | Hock bend min (limit -150; rest -52) | -145.7 | -145.7 | -145.8 |
+| `actions.joint_bends` carpus / hock min (must stay > 0) | 10.4 / 52.4 | 21.1 / 128.7 | 9.7 / 49.0 |
 | LOD2 non-hoof min z (trunk) | -0.7 cm | -0.9 cm | -0.7 cm |
-| Swinging hoof min z (vs rest baseline) | -0.1 cm | - | -0.4 cm |
-| Max bone accel all / trunk+head (mm/f^2) | 30 / 12 | 29 (ear flick) / 2.6 | 34 / 9 |
+| LOD2 head-region min z | +3.9 cm (f56 sniff) | +19.8 cm | +13.7 cm (f54 lunge) |
+| Head bone midpoint z | 0.209 m (f56) .. 0.557 m (f150) | 0.503 .. 0.576 m (0.557 at the seam) | 0.557 m (f0) .. 0.890 m |
+| Swinging hoof min z (vs rest baseline) | -0.1 cm | - | -0.3 cm |
+| Max bone accel all / trunk+head (mm/f^2) | 30 / 12 | 26 (ear flick) / 2.5 | 34 / 9 |
 | Fore cannons/hooves inside the skin in LYING (LOD1) | - | 0% | - |
+
+Seams (all 0.000 mm / 0.000 deg): LieDown end -> Lying_Idle start, Lying_Idle loop, Lying_Idle end -> GetUp start,
+LieDown start and GetUp end vs a `make_clip(Pose())` frame. `JOINT limits: all OK`.
+
+## Final review retune (L5 and the smaller head)
+The final review made the stage-B head smaller (head_scale 1.22 -> 0.97, neck_deepen 1.28 -> 1.10) and asked (L5) for
+the lying head to be held up like GiM's instead of hanging low. The rest bones did not move (the Head bone midpoint is
+the same on both geometries), only the mesh did, so the same keys now leave the muzzle about 7 cm higher.
+| Key (function, frame) | Before | After | Why |
+|---|---|---|---|
+| `lying()` LYING (LieDown f150, Lying_Idle, GetUp f0) | neck 0/1/1, head pitch 6 | neck -9/-10/-9, head pitch 18 | L5: head up level with / above the back |
+| `lie_down` `kn_low` (f56, kneeling sniff, stop) | neck 6/8/6, head pitch 10 | neck 11/12/11, head pitch 14 | the muzzle reaches ~4 cm again |
+| `lie_down` `kn_key` (f48, right carpus lands, stop) | `kn`: neck 0/2/2, head (6, 0, 0) | neck 5/7/6, head (9, -1, 1) | the head is already on its way down, so the dip into the sniff is no faster than before |
+| `lie_down` `ly_turn` (f134) | neck 2/3/2, head pitch 7 | neck -3/-3/-3, head pitch 11 | the head comes up over f112-150 (peak 14.8 mm/f), not all in the last 16 frames (23.3 mm/f) |
+| `get_up` `prep` (f8) | neck -4/-4/-2, head pitch 0 | neck -11/-12/-10, head pitch 12 | keeps the "head up" beat; the old values would lower the head from the new LYING |
+
+Bone-based rows (Head midpoint, speeds, accelerations) are identical on both geometries for the same keys (the rest
+bones did not change); the mesh rows (LOD2 head region) are not.
+| Measurement | Checkpoint 01 (old head, old keys) | New stage B, old keys | New stage B, L5 LYING only | New stage B, retuned (final) |
+|---|---|---|---|---|
+| Lying_Idle Head bone midpoint z (f0 / range) | 0.376 / 0.316-0.402 m | same | 0.557 / 0.503-0.576 m | 0.557 / 0.503-0.576 m |
+| LieDown LOD2 head-region min z (f56) | +3.8 cm | +10.9 cm | +10.9 cm | +3.9 cm (the nose pad) |
+| Lying_Idle LOD2 head-region min z | +7.1 cm | +13.9 cm | +19.8 cm | +19.8 cm |
+| GetUp LOD2 head-region min z (f54) | +6.5 cm | +13.7 cm | +13.7 cm | +13.7 cm (keys there unchanged) |
+| LieDown head rise into LYING: Head midpoint z, peak speed | 0.31 (f114) -> 0.38 m, 11.9 mm/f | same | 0.30 (f123) -> 0.56 m, 23.3 mm/f | 0.30 (f112) -> 0.56 m, 14.8 mm/f |
+| LieDown dip into the sniff (f34-70): peak Head midpoint speed | 23.8 mm/f | same | 23.8 mm/f | 22.6 mm/f |
+| GetUp f0-40: Head midpoint z max, peak speed | 0.472 m (f8), 18.0 mm/f | same | 0.557 m (f0), 18.6 mm/f | 0.602 m (f7), 18.6 mm/f |
+| Max trunk/head accel LieDown / Lying_Idle / GetUp (mm/f^2) | 12 / 2.6 / 9 | 12.0 / 2.6 / 9.0 | 12.0 / 2.5 / 8.8 | 12.0 / 2.5 / 8.8 (a one-step dip into the sniff, without `kn_key`, gives 19.5 in LieDown) |
+
+- The Lying_Idle look-around overlays are relative to LYING and were kept: the neck pitch stays within -11.4..-6.2
+  deg per bone and the summed neck yaw within -18.7..+32 deg. Renders of f0/f40/f78/f116 (side, front, 3/4, head
+  close-up) show no crease or over-bend at the neck.
+- The standing sniff (f14) keeps its keys: its head-region min is 31 cm. It never reached the ground; the muzzle
+  goes down at the kneeling sniff (f56), which is the LieDown head minimum.
+- GetUp: the head goes 0.557 -> 0.602 m (f7) -> 0.352 m (f28, fore legs folded), 0.13 m more of a drop than before
+  (it was 0.472 -> 0.352 m). The later keys (fold, gather, lunge, rise) are unchanged.
 
 ## Review findings (e8bc810) and how they were fixed
 1. **Loaded fore fetlock hyperextension** (-117/-124 deg). The lying body now lies 0.40 m back, so the knees land about
