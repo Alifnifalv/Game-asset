@@ -5,6 +5,9 @@ returns `['LieDown', 'Lying_Idle', 'GetUp']`).
 Standalone test: `python3 tools/clips/lying.py [--render none|all] [--step 4] [--scratch DIR] [--no-inside]` builds the
 three clips on `build/stage_b.blend` (~3 s), prints QA, saves `<scratch>/test.blend` and renders
 `<scratch>/<Clip>_{left,threequarter}.{png,gif}` (~10 min with renders on the shared 4-core CPU).
+Always pass both flags for a QA run: `--render none` (the default is `all`, ~10 min) and `--scratch <your scratch dir>`
+(the default is a hard-coded path from the session that wrote the module): `python3 tools/clips/lying.py --render none
+--scratch <scratch>/lying` (~5 s).
 
 History: first version 9dd402a; adversarial review e8bc810 (3 major, 2 minor); this rework fixes all five findings
 (see "Review findings" below). The module was largely rewritten; the framework (Hermite body/foot tracks, knee lock,
@@ -59,18 +62,22 @@ curl. The lying body is `LY_B` = 0.40 m behind the standing body.
   frames satisfy it; touchdown keys are "stop" keys, so the chest decelerates into the contact without rebounding.
 - **Reach guard** (`reach_guard`, in `clip_fn` for loaded fore legs): if the keys ever ask a loaded fore leg for more
   reach than its cap, body z is lowered to a C1 soft limit. Otherwise the library clamps the foot target toward the elbow
-  (0.992 x chain) and the planted hoof lifts or slides. `guard_cap` eases the cap from the rest reach to the
-  unclamped `D_STAND` over LieDown's sniff. Treat it as a safety net: fix keys that trip it (a keyed bulge clamped by it
-  is a velocity kink).
+  (0.9985 x chain since c4fbcaa; 0.992 when this family was written) and the planted hoof lifts or slides. `guard_cap`
+  eases the cap from the rest reach to the unclamped `D_STAND` over LieDown's sniff. Treat it as a safety net: fix keys
+  that trip it (a keyed bulge clamped by it is a velocity kink).
 
 ## Rig facts learnt here (apply to other families too)
 - The fore leg geometry makes a loaded carpus buckle fast: forearm 0.312 m, cannon 0.178 m. The rest elbow-fetlock
   distance is 0.996 x chain; 25 deg of carpus bend is reached with about 1 cm of elbow drop, and a 5 cm drop over a
   flat hoof already gives fetlock -58 deg. A chest that goes down must either keep the hoof ahead of the elbow or roll
   the hoof onto its toe.
-- anim_lib clamps a foot target at 0.992 x chain, and the fore legs' rest reach is 0.996, so every `Pose()` frame holds
-  the fore hooves about 2 mm above their true contact. When a loaded leg comes closer than 0.992, the hoof settles those
-  2 mm. Make that happen gradually (LieDown does it over the sniff).
+- anim_lib clamps a foot target at **0.9985 x chain** (since c4fbcaa; it was 0.992) and its body-vault pass acts above
+  0.997 x chain. The fore legs rest at 0.996 x chain, so a `Pose()` frame **equals the rest pose**: the fore hooves sit
+  on their true contact and the rest carpus bend is **10.4 deg** (it was 15 deg, with the hooves held ~2 mm up). A
+  planted fore leg has little slack: its elbow can rise only ~0.5 mm before `reach_pass` (with a `stance_fn`) lowers
+  the body, and ~1.2 mm before the clamp lifts the hoof. So standing clips still must not raise the elbows while the
+  fore hooves are planted. The old advice to let a loaded hoof "settle the 2 mm" gradually no longer applies (the
+  LieDown sniff still eases `guard_cap` from the rest reach to `D_STAND`, which is harmless).
 - `anim_lib.blend_pose` returns a fresh `Pose()` with `auto_top=True`. Reset it (`auto_top = False`) when blending
   poses of an auto_top-off family, or the scapula/femur auto-aim switches on for that key.
 - Spine roll sign is opposite to `body_rot` roll: spine roll + = LEFT side down (`body_rot` roll + = right side down).
@@ -79,17 +86,17 @@ curl. The lying body is `LY_B` = 0.40 m behind the standing body.
 - The front `FrontUpperLeg` weights cover a 16 x 27 cm block of the brisket, so a fully folded cannon (carpus 156 deg)
   disappears inside the forearm. Folded fore legs are fine in transitions, but a held pose should stretch them.
 
-## QA (`python3 tools/clips/lying.py --render none`, build/stage_b.blend of 2026-09-28 13:13)
+## QA (`python3 tools/clips/lying.py --render none --scratch <scratch>`, checkpoint 01: build/stage_b.blend of 2026-09-28 15:00, HEAD 137fb8b)
 | Check | LieDown | Lying_Idle | GetUp |
 |---|---|---|---|
-| IK gap / planted fetlock slide | 0.05 / 0.01 mm | 0.00 / 0.00 mm | 0.04 / 0.04 mm |
+| IK gap / planted fetlock slide | 0.05 / 0.00 mm | 0.00 / 0.00 mm | 0.04 / 0.00 mm |
 | Locked carpus slide | 0.04 mm | - | 0.03 mm |
 | Loaded hoof pivot drift (toe) | 0.00 mm | - | 0.00 mm |
 | Loaded fore fetlock min (limit -65; rest -31) | -51.9 | -15.1 | -61.3 |
-| Standing loaded carpus max (limit 25; rest 15) | 23.9 (lift-off) | - | 15.1 |
+| Standing loaded carpus max (limit 25; rest 10.4) | 23.9 (lift-off) | - | 10.6 |
 | Stifle bend max (limit 140; rest 60) | 135.5 | 134.0 | 134.0 |
 | Hock bend min (limit -150; rest -52) | -145.7 | -145.7 | -145.8 |
-| LOD2 non-hoof min z | -0.5 cm | -0.8 cm | -0.5 cm |
+| LOD2 non-hoof min z (trunk) | -0.7 cm | -0.9 cm | -0.7 cm |
 | Swinging hoof min z (vs rest baseline) | -0.1 cm | - | -0.4 cm |
 | Max bone accel all / trunk+head (mm/f^2) | 30 / 12 | 29 (ear flick) / 2.6 | 34 / 9 |
 | Fore cannons/hooves inside the skin in LYING (LOD1) | - | 0% | - |
@@ -124,4 +131,6 @@ curl. The lying body is `LY_B` = 0.40 m behind the standing body.
   f22-70), where cattle really do fold them.
 - The tail rests by hanging with its tip curled on the ground (`LYING_TAIL`); it does not wrap around the body.
 - The anim_lib qa "fetlock loop seam" (182 mm) is meaningless for the one-shot clips.
-- Clips were checked on `build/stage_b.blend` only, before `calf_animations.py` re-parents the hooves for export.
+- Clips are checked on `build/stage_b.blend` (authoring rig). `calf_animations.py` then re-parents the hooves for export
+  (world hoof change 0.000 mm, `build/logs/animations.log`), and the validator matches the FBX/GLB to stage D to
+  ≤0.05 mm (GLB; FBX ≤0.004 mm).

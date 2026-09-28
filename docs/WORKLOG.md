@@ -3,24 +3,70 @@
 Newest status first, then a chronological log. Each entry: what, why, how it was verified, open issues.
 
 ## Current status (update on every milestone)
+State of **CHECKPOINT 01** (`137fb8b`; asset content = `cdcf752`; `tools/build_all.sh` run of 2026-09-28 15:00-15:07, 375 s).
+Every open item is in "Open issues" below (IDs `OI-nn`).
+
 | Area | State | Where |
 |---|---|---|
-| Geometry (calf reshape, eyes, UVs, LODs) | Done, tuned against the side-view silhouette | `tools/calf_stage_a.py`, `tools/calf_stage_b.py` |
-| Rig upgrade | Jaw + Ear.L/R done; lower-leg tails fixed; 30 fps | `tools/calf_stage_b.py` |
-| Coat textures | Done (2048 verified); hooves changed to pale horn; final 4K run -> `build/textures`, `build/stage_c.blend` | `tools/calf_textures.py` |
-| Existing clips on the reshaped rig (Eating/Idle) | Done: leg IK re-solved (0 mm hoof gap; Idle front.R 2.3 mm unreachable in the source too) | `tools/check_animation.py`, `tools/rebake_leg_ik.py` |
-| Unity export + validator | Done: 117 PASS / 0 FAIL / 1 WARN on the 10-clip stage D; Khronos glTF validator 0 errors | `tools/export_unity.py`, `tools/validate_export.py`, `Unity/Calf/README.md` |
-| New animation set | Gaits done: Walk/Trot/Gallop (RM + in place), TurnLeft90/Right90. Key-pose families in progress | `tools/calf_animations.py`, `tools/anim_lib.py`, `tools/anim_gait.py`, `tools/clips/` |
-| Export rig | Hooves re-parented under the lower legs for engine blending (world motion unchanged, 0.000 mm) | `anim_lib.reparent_hooves_for_export` |
-| Unity setup script | Written; can't be compiled here, needs one Unity check | `Unity/Calf/Editor/CalfSetup.cs` (menu Tools > Calf > Setup Calf Asset) |
-| Key-pose clip families | Workflow author → adversarial review → fix. idle_graze (review: pass), lying (fixed after review), actions (Death/Leap fixed after review, HeadShake passed) | `tools/clips/*.py` |
-| Fur (optional, URP) | Shader + component + fur mask/noise textures written; needs a Unity compile check | `Unity/Calf/Fur/`, `tools/calf_fur_textures.py` |
+| Geometry (calf reshape, eyes, UVs, LODs) | Done. LOD0/1/2 46,752 / 11,688 / 2,688 tris, one `UVMap`. 1.62 m long, 1.01 m high (withers), 0.69 m wide (ears). Hoof soles on z = 0 (LOD0 min z 0.2 mm). | `tools/calf_stage_a.py`, `tools/calf_stage_b.py` |
+| Rig | Done. 46 bones (43 source + `Jaw`, `Ear.L/R`); lower-leg tails on the fetlock; 30 fps. Export rig (stage D, FBX, GLB): hooves re-parented under the lower legs (world change 0.000 mm), 42 bones (the 4 pole helpers are dropped). | `tools/calf_stage_b.py`, `anim_lib.reparent_hooves_for_export` |
+| Skin weights | Withers/neck smoothed (813faea). LOD0/LOD1 still carry up to 7 influences, which the exporter refits to 4 (OI-02). | `tools/calf_stage_b.py`, `tools/export_unity.py` |
+| Textures | Done at 4096: BaseColor, Normal, Roughness, AO, MaskMap (HDRP), MetallicSmoothness (URP); eye 1024; fur mask + noise. `T_Calf_Height` is authoring-only and not exported. | `tools/calf_textures.py`, `tools/calf_fur_textures.py` |
+| Animation set | Done: 21 clips. Idle and Eating (imported; leg IK re-solved: 0 mm hoof gap, except Idle front.R 2.3 mm, which the source cannot reach either), Walk/Trot/Gallop (in place + `_RM`), TurnLeft90/Right90, Idle_LookAround, Graze_Start/Loop/End, Call, HeadShake, LieDown, Lying_Idle, GetUp, Death, Leap. | `tools/calf_animations.py`, `tools/anim_lib.py`, `tools/anim_gait.py`, `tools/clips/` |
+| Key-pose clip families | Done and reviewed (author → adversarial review → fix): idle_graze passed with 8 minors open (OI-12..19); lying and actions fixed after review. The family QAs reproduce on the checkpoint (seams 0.000 mm, lying `JOINT limits: all OK`). | `tools/clips/*.py`, `docs/anim_lying.md` |
+| Unity export + validator | Done. **175 PASS / 0 FAIL / 1 WARN** as `build_all.sh` runs it (with `--render-dir`, which adds 3 render checks; 172 PASS without). The WARN is the 4-influence skin: Gallop f14, max 23.7 mm. Khronos glTF-Validator: 0 errors. | `tools/export_unity.py`, `tools/validate_export.py`, `build/logs/build_all.log` |
+| Unity setup script, Animator, shell fur | Written, not run in Unity (OI-01). | `Unity/Calf/Editor/CalfSetup.cs`, `Unity/Calf/Fur/` |
+| Unity verification | **Not done.** Needs a machine with Unity (OI-01). | `Unity/Calf/README.md` "Not verified" |
+| One-command build | Done: `bash tools/build_all.sh`. Read the "Do not" list in CLAUDE.md first (OI-27..29, OI-33). | `tools/build_all.sh` |
+| Final multi-lens review | **In progress** (lenses: likeness, animation, export rig, unity, docs). Its fixes land after checkpoint 01 and need a rebuild, the gate (CLAUDE.md) and a new checkpoint. | "Log" below |
+
+## Open issues
+One list for the whole project. The dated log entries and `Unity/Calf/README.md` "Known issues" point here; close items here.
+Severity: major = visible in normal gameplay or blocks a use case; minor = close-up or polish; note = accepted.
+
+| ID | Area | Issue | Sev. | Source | Status |
+|---|---|---|---|---|---|
+| OI-01 | Unity | Nothing has been imported or run in Unity: FBX import, Avatar and Root node, root motion (`_RM`, turns, Leap, Death), loop-match lights, clip compression, URP/HDRP material look, LODGroup, `CalfSetup.cs`, `CalfFur.cs` and the shell-fur shader. | major | README "Not verified"; PLAN "Known limits" | open: needs a machine with Unity |
+| OI-02 | Skin | Stage B limits only the cage (LOD2) to 4 influences; subdivision gives LOD0/LOD1 up to 7. The export refit leaves a 23.7 mm max deviation from the Blender skin (Gallop f14, brisket midline), so Blender previews differ from Unity. | minor | export entry; README "Known issues"; `export.log` | open: limit and refit after subdivision, and clean up the brisket weights, in stage B |
+| OI-03 | Skin | The withers/neck crease when the neck pitches down (grazing). | - | session-1 animation entry; idle_graze "Open" | **closed**: 813faea Laplacian smoothing of Torso2/3, Neck1-3, FrontShoulder (`calf_stage_b.py`). GRAZE nose pad re-measured at checkpoint 01: 3.27-6.23 cm, unchanged. |
+| OI-04 | Hooves | README: the hind hoof soles sit 12 mm below y = 0. | - | README "Known issues" | **closed**: stage B lifts the soles (LOD0 min z 0.0002 m; validator ground 0.0002). The README note is stale. |
+| OI-05 | Death | No root motion. | - | actions "Open" | **closed**: the Root drifts 0.787 m to the calf's right (actions rework). |
+| OI-06 | Leap | The lead fore is reach-clamped 2.3 cm and slaps down at 50 mm/f. | - | actions "Open" | **closed**: 15 mm/f on the last airborne frame, no clamp. |
+| OI-07 | Death | Lower-leg crossing and tail contact were checked visually only. | - | actions "Open" | **closed**: OVERLAP QA (LOD2 limb pairs 0, bone capsules clear). |
+| OI-08 | Leap | No in-place Leap (root motion only). | minor | actions "Open" | open |
+| OI-09 | Death | No `Dead_Idle` loop. It must reuse `death_fn`'s hook/post functions with `dead_pose()`. | minor | actions "Open" | open |
+| OI-10 | Lying | The lying calf is 0.40 m behind its standing Root (LieDown/GetUp have no root motion), so the collider is offset while lying. | minor | lying "Open"; `anim_lying.md` | open: collider offset, or root motion on LieDown/GetUp |
+| OI-11 | Death | The topple takes 22 frames; the GiM calf falls in about 13-15 frames with looser, splayed legs. | minor | actions "Open" | open |
+| OI-12 | Graze | idle_graze minor 1: the muzzle never touches the ground (nose pad 3.3-6.2 cm in Graze_Loop). | minor | idle_graze review | open |
+| OI-13 | Graze | idle_graze minor 2: the right fore is "over at the knee" in GRAZE (carpus 26.8°). | minor | idle_graze review | open |
+| OI-14 | Graze | idle_graze minor 3: abrupt step lift-off (the stepping fetlock jumps 8.6 mm on Graze_Start f12 / Graze_End f13). | minor | idle_graze review | open |
+| OI-15 | Graze | idle_graze minor 4: the tear jerk snaps in one frame (Graze_Loop f11/f53/f87). | minor | idle_graze review | open |
+| OI-16 | Graze | idle_graze minor 5: the swing hoof grazes the ground on LOD2 only. | minor | idle_graze review | open |
+| OI-17 | Idle/Graze | idle_graze minor 6: the fly-swat tail swish is weak (tip ±8-12 cm). | minor | idle_graze review | open |
+| OI-18 | Mesh | idle_graze minor 7: no mouth interior; the Call jaw stretches the lips into a sheet. | minor | idle_graze review | open |
+| OI-19 | Graze | idle_graze minor 8: Graze_End steps the left fore 6 cm backward. | minor | idle_graze review | open |
+| OI-20 | Rig | The jaw is a single hinge (no lateral chewing); there are no eyelids (no blinks). | minor | idle_graze "Open" | open |
+| OI-21 | Lying | GetUp's left-fore plant is the tightest joint (fetlock -61°, limit -65); the hind swings lift only 1-2 cm; folded fore cannons hide in the transition frames; the tail does not wrap the body. | note | `anim_lying.md` | accepted |
+| OI-22 | Leap/Death | Leap: the hind hocks absorb to 85-89° for 2-3 frames. Death: the trunk impact is a one-frame stop. | note | actions "Open" | accepted (intended) |
+| OI-23 | Fur | PLAN's alpha fur cards (forehead tuft, ear fringe, tail switch) do not exist (`grep -ri "fur card" tools/` finds nothing). Only the optional URP shell fur exists. | minor | PLAN | not started |
+| OI-24 | Textures | PLAN's anatomical landmark detail in the normal map (shoulder, hip points, knees, hocks, neck folds) is not done: the normal map carries only fur-strand height. | minor | PLAN "Known limits" | not started |
+| OI-25 | Rig | PLAN phase 3's persistent Blender IK authoring rig was not built. IK exists only inside `anim_lib` and `rebake_leg_ik.py`, and every clip is baked to FK. | note | PLAN | accepted deviation |
+| OI-26 | Unity | PLAN's "speed/turn blend tree": `CalfSetup.cs` builds a Speed-only blend tree, with turns as trigger states. | note | PLAN | accepted deviation |
+| OI-27 | Pipeline | `calf_animations.py` always writes `build/stage_b_rebaked.blend`, whatever `--out` says. A scratch run still writes into `build/`, and parallel runs race on that file (this happened during the final review). | major | final review DOC-04a | open (code); rule in CLAUDE.md "Do not" |
+| OI-28 | Pipeline | `build_all.sh --skip-textures` re-runs stages A/B but reuses the old `build/stage_c.blend` (a full copy of the previous stage B), so stage-B edits never reach stage D or the FBX. | major | DOC-04b | open (code); rule in CLAUDE.md "Do not" |
+| OI-29 | Pipeline | Nothing checks texture resolution: `--tex-res 2048` copies 2K maps into the committed `Unity/Calf/Textures`, and the validator still reports 0 FAIL. | major | DOC-04c | open (code); rule in CLAUDE.md "Do not" |
+| OI-30 | QA | The clip QA gives no pass/fail verdict or exit code. The build log's `planted slide 0.00 mm` is measured only for Walk_RM/Trot_RM/Gallop_RM; the other 18 clips get no `planted_fn`. | major | DOC-05 | open (code); the gate is defined in CLAUDE.md |
+| OI-31 | QA | The clip modules default their output to one session's scratchpad path. `lying.py` defaults to `--render all` (~10 min). | minor | DOC-09 | open (code); pass `--out-dir` / `--scratch` and `--render none` |
+| OI-32 | Tools | `render_views.py` silently renders the rest pose when `--action` is not found, and Blender's FBX importer names the actions `CalfRig\|<clip>`. | minor | DOC-10 | open (code); documented in the docstring |
+| OI-33 | Pipeline | `build_all.sh` / `export_unity.py` overwrite the git-tracked `Unity/Calf` and `build/logs`. A manual validator run after build_all left `validate.log` at 172 PASS while `build_all.log` says 175. | minor | DOC-13 | open (code); rule in CLAUDE.md "Do not" |
+| OI-34 | Review | Findings of the final multi-lens review (likeness, animation, export rig, unity, docs). | - | final review | in progress: add a row per finding that stays open after the fix round |
 
 ## Checkpoints (safe, pushed)
 Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline --grep CHECKPOINT`). The asset content is identical to the commit hash listed.
+
 | # | Asset content at | State |
 |---|---|---|
-| 01 | `cdcf752` (+ docs-only commits after it) | Full pipeline from cow.glb → `Unity/Calf`: calf mesh (3 LODs), 4K textures, 21 clips, FBX + GLB. Validator 172 PASS / 0 FAIL / 1 WARN (4-influence skin, Gallop max 23.7 mm). Final multi-lens review in progress. |
+| 01 | `cdcf752` (+ docs-only commits after it) | Full pipeline from cow.glb → `Unity/Calf`: calf mesh (3 LODs), 4K textures, 21 clips, FBX + GLB. Validator 175 PASS / 0 FAIL / 1 WARN as `build_all.sh` runs it (172 PASS without `--render-dir`; the WARN is the 4-influence skin, Gallop max 23.7 mm). Final multi-lens review in progress. |
 
 ## Log
 
@@ -79,7 +125,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 - **Subagent findings** (`tools/check_animation.py`, `tools/rebake_leg_ik.py`):
   - The reshape caused 1–4.6 mm hoof separation in Eating/Idle; the IK re-bake fixes it.
   - Hind legs reproduce the source best with no pole.
-  - The source skinning stretches the withers about 2× when grazing. Smoothing the Torso3/Neck1/FrontShoulder weights is still open.
+  - The source skinning stretches the withers about 2× when grazing. Smoothing the Torso3/Neck1/FrontShoulder weights is still open. *[Done later in 813faea: OI-03, closed.]*
 - **Imported clips don't key every bone.** Unkeyed bones inherit the previous clip's pose, in Blender and in Unity transitions. `complete_action` keys all missing channels at rest.
 - **Unity blending.** Hooves hang off Root in the source rig, so blend trees would blend hoof positions and leg rotations separately and the hooves would detach. `reparent_hooves_for_export` re-parents the hooves under the lower legs and re-bakes (world change 0.000 mm).
 - `tools/calf_animations.py` assembles everything into `build/stage_d.blend`. `tools/render_clip.py` renders root-tracking filmstrips/GIFs on a checker ground (makes sliding visible).
@@ -94,6 +140,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 
 ### 2026-09-28: clip family `idle_graze` (Idle_LookAround, Graze_Start/Loop/End, Call)
 **What:** `tools/clips/idle_graze.py` (picked up by `tools/calf_animations.py`; `build(calf)` returns the 5 names).
+
 | Clip | Frames | Content |
 |---|---|---|
 | `Idle_LookAround` | loop 150 | Pose() → look left → centre → look right → Pose(); head leads neck by 5 f, weight shift/body yaw lag 7 f; ears prick toward the look + independent flicks (L f30, R f88, L f124); tail swish f58–100; 3 breaths |
@@ -105,8 +152,9 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 **How:** shared constant poses `stand_pose()` (= Pose()) and `graze_pose()`; per-channel monotone-cubic key curves (`Curve`, no overshoot) plus `group_blend` (a separate blend weight per body part = overlapping action) plus overlays (breathing, ear flicks, tail waves, foot step). Boundary frames return the shared poses verbatim, and the QA prints how far the raw curves are from them there (0). The standalone `__main__` prints `calf.qa`, a Calf_LOD2 mesh ground check (non-hoof / hoof per leg / nose pad / head), signed carpus/hock bend, a pop check (2nd difference of every bone, wrapped for loops) and boundary/seam diffs, then renders strips + GIFs.
 
 **Gotchas found (useful for every family):**
-- **Pose() already clamps the front hooves ~2 mm up.** The straight front legs are asked 3 mm more than 0.99 × chain at rest (the `pose_to_basis` clamp is 0.992): front fetlock z 90.6 mm vs 88.6 mm rest. With a `stance_fn`, `reach_pass` lowers the body on standing frames (dilated/smoothed over ±5 f), so the shared Pose() boundary frames would differ between clips. This family therefore passes no `stance_fn` and never raises the elbows (body z ≤ 0, no nose-up pitch).
-- **Carpus sensitivity:** the front legs are nearly straight (15° carpus bend at rest). Each 1 cm the elbow drops costs about 15° more carpus flexion. Lower the "front end" with `Torso3` (withers/neck only) and a small body pitch, not with body z.
+- *[Superseded by c4fbcaa: the clamp is now 0.9985 × chain and `Pose()` == rest, see the "Update at checkpoint 01" note under the QA table below.]*
+  **Pose() already clamps the front hooves ~2 mm up.** The straight front legs are asked 3 mm more than 0.99 × chain at rest (the `pose_to_basis` clamp is 0.992): front fetlock z 90.6 mm vs 88.6 mm rest. With a `stance_fn`, `reach_pass` lowers the body on standing frames (dilated/smoothed over ±5 f), so the shared Pose() boundary frames would differ between clips. This family therefore passes no `stance_fn` and never raises the elbows (body z ≤ 0, no nose-up pitch).
+- **Carpus sensitivity:** the front legs are nearly straight (15° carpus bend at rest; 10.4° since c4fbcaa). Each 1 cm the elbow drops costs about 15° more carpus flexion. Lower the "front end" with `Torso3` (withers/neck only) and a small body pitch, not with body z.
 - **`Torso`/`Torso2` pitch moves the front legs** (`FrontShoulder.*` are children of `Torso2`). A −0.8° Torso pitch lifted the front hooves 7 mm. Keep Torso : Torso2 ≈ 1 : −1.67 so the elbow height is unchanged.
 - **Hoof flex near the ground pushes the toe INTO the ground first:** the hoof chain hangs ~22° off vertical, so small flex swings the tip down (up to 9 mm). Tie flex to lift height (flex ∝ h²).
 - Calf_LOD2 hoof vertices sit at z −1.3 cm at rest; judge hoof contact relative to each leg's rest minimum. The non-hoof minimum (1.45 cm) is the pastern skin.
@@ -114,6 +162,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 - The nose pad (`orig_part` 3) is the lowest head point when grazing. GRAZE nose ≈ 4 cm up, ~40 cm ahead of the front hooves.
 
 **QA** (`python3 tools/clips/idle_graze.py`, build/stage_b.blend):
+
 | Clip | IK gap | Planted slide | Planted hoof vs rest | Nose pad z | Carpus bend | Pops (non-ear/leg) |
 |---|---|---|---|---|---|---|
 | Idle_LookAround | 0.00 mm | 0.05 mm | ≤2.1 mm (= Pose() clamp) | 52.9–66.4 cm | 15.1–17.5° | 0.29°/f² |
@@ -125,9 +174,17 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 - Both loop seams, and every Pose()/GRAZE boundary (Start end = Loop start, Loop end = End start, Pose() at the standing ends), are 0.0000 mm / 0.0000°.
 - Tail swish clearance to the rump/thigh verts is ≥3.5 cm.
 - Fetlock "loop seam" 60 mm on Graze_Start/End is expected (not loops; the left fore moves 6 cm).
+- **Update at checkpoint 01** (after c4fbcaa: reach clamp 0.9985 × chain, so `Pose()` == rest). Re-run with
+  `python3 tools/clips/idle_graze.py --no-render --out-dir <scratch>` on the 15:00 `build/stage_b.blend`: the
+  "Planted hoof vs rest" column is now 0.0 mm for every clip (no clamp), and the rest carpus bend is **10.4°**
+  (carpus ranges: Idle_LookAround 10.4-17.5°, Graze_Start 10.4-58.5°, Graze_Loop 16.5-26.8°, Graze_End 10.4-56.8°,
+  Call 10.4-17.6°). Nose pad z, pops, seams and boundaries are unchanged (0.0000 mm / 0.0000°). With the new clamp,
+  a `stance_fn` no longer moves `Pose()` frames (the fore legs rest at 0.996 × chain, below the 0.997 vault
+  threshold), but the "never raise the elbows" rule still holds: while a fore hoof is planted, an elbow may rise only
+  ~0.5 mm before `reach_pass` lowers the body (±5 f) and ~1.2 mm before the clamp lifts the hoof.
 
 **Open:**
-- The source skinning bulges the withers when the neck pitches hard: the neck bend is spread over Torso3 + Neck1–3 to limit it; weight smoothing is still open.
+- The source skinning bulges the withers when the neck pitches hard: the neck bend is spread over Torso3 + Neck1–3 to limit it; weight smoothing is still open. *[Done in 813faea: OI-03, closed.]*
 - The jaw is a single hinge, so there is no lateral chewing.
 - There are no eyelids, so there are no blinks.
 
@@ -147,7 +204,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
   - body roll tilts the front IK planes (the poles are children of Body);
   - spine roll sign is opposite to body roll;
   - ear axes;
-  - the library's reach clamp makes `Pose()` differ from the armature rest by 9 mm / 3° in the fore legs.
+  - the library's reach clamp makes `Pose()` differ from the armature rest by 9 mm / 3° in the fore legs *[fixed in c4fbcaa: `Pose()` == rest]*.
 
 ### 2026-09-28: texture + export agents finished
 - **Textures** (`tools/calf_textures.py`):
@@ -158,7 +215,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 - **Export** (`tools/export_unity.py`, `tools/validate_export.py`):
   - Takes are exported through **NLA strips, one per action**. Blender 5's "All Actions" mode names takes `CalfRig|X` and leaked 198 mm of pose between takes in a test.
   - The exporter pre-rotates the rig rest so `CalfRig` has identity rotation in Unity (the FBX apply-transform option doesn't cover armatures). The unweighted PoleTarget helpers are dropped.
-  - **Subdivided LODs carry up to 7–8 influences.** The exporter refits over-limit vertices to their best 4 bones against poses sampled from all clips. The worst case drops from 41 → 23.5 mm vs Blender (Gallop, brisket midline). Open item: limit and refit the weights in stage B so Blender previews equal Unity.
+  - **Subdivided LODs carry up to 7–8 influences.** The exporter refits over-limit vertices to their best 4 bones against poses sampled from all clips. The worst case drops from 41 → 23.5 mm vs Blender (Gallop, brisket midline). Open item: limit and refit the weights in stage B so Blender previews equal Unity (OI-02; at checkpoint 01 the 21-clip refit gives 23.7 mm, Gallop f14).
   - The body submesh is exported last (the fur needs this).
   - The validator reads the FBX/GLB directly with FBX/glTF transform maths (0.001 mm vs source), re-imports both, runs Khronos gltf-validator (npm, in build/node_tools) and renders comparisons.
 - **Follow-ups done:**
@@ -166,12 +223,12 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
   - `CalfSetup.cs` now sets `optimizeBones=false` (Strip Bones would remove the unweighted `Root` motion node) and `importTangents=Import`.
 
 ### 2026-09-28: adversarial review of clip family `idle_graze` (commit b0e7536)
-- **Verdict: pass, with minor issues only.** No blocker or major issue was found. Re-ran `python3 tools/clips/idle_graze.py --no-render` on the current `build/stage_b.blend` (13:13, hooves on z=0). Then measured independently on Calf_LOD0, LOD1 and LOD2 (evaluated meshes; reviewer harness kept in the session scratchpad, not committed).
+- **Verdict: pass, with minor issues only.** No blocker or major issue was found. Re-ran `python3 tools/clips/idle_graze.py --no-render` on the current `build/stage_b.blend` (13:13, hooves on z=0). Then measured independently on Calf_LOD0, LOD1 and LOD2 (evaluated meshes; the reviewer's harness lived in that session's scratchpad and is gone; the family QA now prints equivalent checks).
 - **Confirmed:**
   - Weight-bearing hooves hold:
     - fetlock slide ≤0.08 mm;
     - every planted hoof **vertex** drifts ≤2.5 mm in xy (skin deformation only);
-    - front hooves bob ≤3 mm vertically, which is the known 2 mm `Pose()` reach clamp.
+    - front hooves bob ≤3 mm vertically, which is the known 2 mm `Pose()` reach clamp *[gone since c4fbcaa: planted hoof off its rest height 0.0 mm]*.
   - Mesh ground: LOD0 non-hoof min z is 22.4 mm in every clip, the same as rest.
   - Clearances stay positive: tail to thigh ≥27 mm, head to fore legs ≥9 cm, ears to legs ≥17 cm.
   - Loop seams and Pose()/GRAZE boundaries are 0.0000 mm / 0°. The Root is never keyed.
@@ -188,10 +245,11 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
   6. **The fly-swat swish is weak.** The tail tip moves only ±8–12 cm sideways (Idle f64–84, Graze_Loop f56–76), so it barely reads from behind.
   7. **The mesh has no mouth interior.** The only boundary edges are at the eyes. The 24° jaw in `Call` therefore stretches the lip skin into a flat sheet, most visible from the front.
   8. **`Graze_End` walks the left fore backward 6 cm,** an unusual move for cattle. An alternative is a forward shuffle with root motion.
-- **Re-check after the pending stage B rebuild:** commit 813faea smooths the withers/neck weights, so the GRAZE nose height and the neck crest can shift.
+- **Re-check after the pending stage B rebuild:** commit 813faea smooths the withers/neck weights, so the GRAZE nose height and the neck crest can shift. *[Re-checked at checkpoint 01 (idle_graze QA on the 15:00 stage B): nose pad 3.27-6.23 cm in Graze_Loop, unchanged. The crest was not re-rendered.]*
 
 ### 2026-09-28: clip family `actions` (Death, Leap, HeadShake)
 **What:** `tools/clips/actions.py` (picked up by `tools/calf_animations.py`; `build(calf)` returns the 3 names). Standalone: `python3 tools/clips/actions.py [--no-render] [--only Death,...]` builds on `build/stage_b.blend`, prints the QA below, saves `<scratchpad>/actions/test.blend` (falls back to `build/clip_tests/actions/`) and renders strips + GIFs (~4 min with renders, ~5 s without).
+
 | Clip | Frames | Content |
 |---|---|---|
 | `Death` | 70, no root motion | Pose() → flinch (head up, ears back, tail clamps, f0-4) → sway right with a right-fore (f5-11) and right-hind (f11-18) stagger step → fore legs buckle (carpi fold forward, chest drops, f12-27) → topples onto its **right** side with gravity acceleration (roll 13° f22 → 87° impact f35), legs lose tension from f22-26 and are carried out to its left → small bounce/roll-back, head hits the ground f38 and bounces, ears flop → right-hind reflex stretch f41-52 → `dead_pose()` held exactly f60-70. As in the GiM reference (26.8-27.5 s: falls onto its right side, legs out, head down). |
@@ -212,24 +270,28 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 - The hind hooves must rise with the hips right after take-off (the leg is at full extension), otherwise they are clamped for several frames.
 
 **QA** (`python3 tools/clips/actions.py`, build/stage_b.blend after the hoof-sole / weight-smoothing rebuild):
+
 | Clip | IK gap | Planted slide | Planted hoof vs rest | Non-hoof min z (LOD2) | Carpus / hock bend | Worst planted reach excess |
 |---|---|---|---|---|---|---|
 | Death | 0.04 mm | 0.01 mm | ≤2.1 mm (Pose() clamp) | -1.51 cm (f35 impact, head/ear); dead pose -0.11 cm; head 0.26 cm | 15-143° / 52-111° | 3 mm (f0 = Pose() clamp) |
 | Leap | 0.03 | 0.01 | ≤2.1 | 2.60 cm (= rest) | 15-114° / 15-118° | 3 mm (Pose() clamp) |
 | HeadShake | 0.00 | 0.00 | ≤2.1 | 2.60 cm | 15° / 52° | 3 mm |
 - All clips start at Pose() (0.0000 mm / 0.0000°); Leap and HeadShake end at Pose() root-relative (≤0.0007 mm). Death f60 = f70 exactly. Carpus/hock bends are positive (anatomical) on every frame; Death measures them in the trunk frame so they stay meaningful on the side. Hoof min z never goes below rest (-0.31 cm vs -0.12 rest in Death).
+- **Update at checkpoint 01** (after c4fbcaa; `python3 tools/clips/actions.py --no-render --out-dir <scratch>`): the
+  "Planted hoof vs rest" column is 0.0 mm and the "reach excess" column -0.4 mm for all three clips (the `Pose()` clamp
+  is gone); the rest carpus is 10.4°. The numbers after the actions rework are in the rework entry below.
 - Largest per-frame rotation 2nd differences (intended): Death Body 7.4°/f² at the impact (f35); Leap FrontLowerLeg.L 47.6°/f² at the lead fore touch-down (f24; the hoof comes in 5 cm/frame and stops) and IKBackLeg.R 96 mm/f² at the hind take-off (f14); HeadShake Head 27.8°/f² (a ±30° 4.3 Hz shake is ~24°/f² by itself), ears ≤35.8°/f².
-- `calf.qa` "fetlock loop seam" is meaningless for these non-loop clips (Death 394 mm = the calf ends lying down).
+- `calf.qa` "fetlock loop seam" is meaningless for these non-loop clips (Death 394 mm here, 669 mm after the rework, which added the 0.79 m root drift: the calf ends lying on its side).
 
 **Open:**
-- Death has no root motion (the body ends 0.30 m to the calf's right of the Root). If gameplay needs the capsule to follow, add a Root drift.
-- The lead fore (LF) is reach-clamped by up to 2.3 cm for 2-3 airborne frames before touch-down, and its hoof arrives with 5 cm/frame then stops (a hoof "slap"). Reducing the leap speed (2.7 m/s) would soften this.
-- No in-place variant of Leap was made (root motion only).
-- Lower-leg crossing on the side and tail contact were checked visually only (the tail rests ≥9 cm up on the thighs, no clearance metric).
+- Death has no root motion (the body ends 0.30 m to the calf's right of the Root). If gameplay needs the capsule to follow, add a Root drift. *[Closed by the rework: 0.787 m root drift (OI-05).]*
+- The lead fore (LF) is reach-clamped by up to 2.3 cm for 2-3 airborne frames before touch-down, and its hoof arrives with 5 cm/frame then stops (a hoof "slap"). Reducing the leap speed (2.7 m/s) would soften this. *[Closed by the rework: 15 mm/f, no clamp (OI-06).]*
+- No in-place variant of Leap was made (root motion only). *[Still open: OI-08.]*
+- Lower-leg crossing on the side and tail contact were checked visually only (the tail rests ≥9 cm up on the thighs, no clearance metric). *[Closed by the rework: OVERLAP QA (OI-07).]*
 
 ### 2026-09-28: adversarial review of clip family `lying` (commit 9dd402a)
 - **Verdict: needs fixes (3 major, 2 minor).** Re-ran `python3 tools/clips/lying.py --render none` on the current `build/stage_b.blend` (13:13). The author's QA reproduces: IK gap ≤0.05 mm, planted slide ≤0.01 mm, carpus lock drift ≤7.1 mm, and every seam (LieDown end = Lying_Idle start/end = GetUp start; both standing ends vs `make_clip(Pose())`) at 0.000 mm / 0.000°. LOD2 non-hoof min z is now −1.0 cm; LOD0 is −0.3 cm. Root is never moved.
-- The reviewer measured independently: joint angles about the body's side axis, LOD0/LOD1 evaluated meshes, ray-parity "inside the skin" tests, and debug renders coloured by bone. The harness (`measure.py`, `inside2.py`, `rview.py`, …) is in the session scratchpad `review_lying/` and is not committed.
+- The reviewer measured independently: joint angles about the body's side axis, LOD0/LOD1 evaluated meshes, ray-parity "inside the skin" tests, and debug renders coloured by bone. The harness (`measure.py`, `inside2.py`, `rview.py`, …) was in that session's scratchpad (`review_lying/`), was never committed and is gone. The lying QA now includes the JOINT, GROUND and INSIDE checks that replaced it.
 - **Major findings** (handed to the fix step):
   1. **Weight-bearing fore legs buckle past anatomical limits.** The hoof is held flat at its rest spot while the chest drops, so the fetlock hyperextends. (Rest fetlock is −31°; real limit about −65°.)
      - LieDown RF, planted f0–34: fetlock −71° → **−117° (f35)**, carpus 124°. The carpus sits 6 cm off the ground and 17.5 cm ahead of the fetlock, *below* the fetlock.
@@ -248,7 +310,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
   - IK gap ≤0.04 mm and planted slide ≤0.01 mm; LOD2 non-hoof min −1.51 cm (Death f35); LOD0 −1.17 cm (right ear, impact), within the 2 cm limit.
   - Every start vs Pose() is 0.0000 mm; Leap/HeadShake end vs Pose() ≤0.0007 mm; Death hold f60 = f70; Leap root 1.447 m.
   - Carpus and hock are always bent the anatomical way.
-- Measured independently: LOD0/LOD2 evaluated meshes (BVH self-overlap by bone region, hoof-vertex ground contact and slide), bone-capsule clearances, signed fetlock angles, world-space pops. New render angles: right-front 3/4, top, right-back and close-ups. Reference frames: death 26.8–27.9 s every 1/15 s; gallop 8.6–13.4 s. Harness and renders are in the session scratchpad `review_actions/` (`probe_mesh.py`, `hoofslide.py`, `bones.py`, `capsule.py`, `worldpop.py`, `still.py`, `st_*.png`, `r_*.png`) and are not committed.
+- Measured independently: LOD0/LOD2 evaluated meshes (BVH self-overlap by bone region, hoof-vertex ground contact and slide), bone-capsule clearances, signed fetlock angles, world-space pops. New render angles: right-front 3/4, top, right-back and close-ups. Reference frames: death 26.8–27.9 s every 1/15 s; gallop 8.6–13.4 s. Harness and renders were in that session's scratchpad (`review_actions/`: `probe_mesh.py`, `hoofslide.py`, `bones.py`, `capsule.py`, `worldpop.py`, `still.py`, `st_*.png`, `r_*.png`), were never committed and are gone. The actions QA now includes the CONTACT, OVERLAP, FETLOCK and REACH checks that replaced them.
 - **HeadShake passes:** hooves static (0.0 mm), no mesh overlaps on LOD2, and the ±30° roll at 4.3 Hz is plausible for fly-shaking.
 - **Major findings** (handed to the fix step):
   1. **Death, f14–26: the weight-bearing fore fetlocks hyperextend.** The hooves are kept flat and planted while the carpi fold 66–139°. Fetlock angle (cannon vs pastern) goes from 28° at rest to LF 69° (f15), 84° (f20) and 89° (f22), and to RF 71 → 102° (f15–25). The real limit is about 65°; Leap landing peaks at 46°. The lower leg reads as a "Z": the knee is forward, the cannon runs back to an upright hoof (`st_buckle.png`). This is the same fault the `lying` review found. Suggested fix: as the carpus folds past ~60°, roll the hoof onto its toe and then onto the dorsal wall (flex the fetlock), or plant the knees.
@@ -278,7 +340,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
   - `leg_state` predicts the baked IK analytically (knee ≤0.03 mm, hock ≤1.2 mm error). Key poses are solved against
     joint angles.
   - Hoof pivots let a loaded hoof roll on its toe with zero contact slide.
-  - A C1 `reach_guard` keeps loaded fore legs off the library's 0.992 reach clamp.
+  - A C1 `reach_guard` keeps loaded fore legs off the library's reach clamp (0.992 × chain then; 0.9985 since c4fbcaa).
   - `fit_femur` keeps the hind joints in range.
 - **QA** (new `JOINT` line with limits, all OK):
   - Loaded fore fetlock: −52 / −61° (LieDown / GetUp; limit −65; was −117 / −124).
@@ -291,7 +353,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
   - Planted slide ≤0.04 mm; pivot drift 0.00 mm; LOD2 body min z ≥ −0.8 cm; max bone accel 34 mm/f².
 - **Gotchas found:**
   - `anim_lib.blend_pose` returns a Pose with `auto_top=True`; reset it in auto_top-off families.
-  - Every `Pose()` frame holds the fore hooves ~2 mm up (the reach clamp is below the rest reach); a loaded hoof
+  - *[Superseded by c4fbcaa: `Pose()` == rest now.]* Every `Pose()` frame holds the fore hooves ~2 mm up (the reach clamp is below the rest reach); a loaded hoof
     settles those 2 mm when the elbow comes closer, so let that happen gradually.
 - **Open:**
   - The lying calf is 0.40 m behind its standing root (Unity collider offset while lying, or add root motion).
@@ -342,6 +404,7 @@ Run: `python3 tools/clips/actions.py --no-render` (~6 s: builds on `build/stage_
   there is no velocity kink and no reach clamp at lift-off.
 
 **Review findings → result** (my QA plus the reviewer's own scripts re-run on the new build):
+
 | Finding | Before | After |
 |---|---|---|
 | Death fore fetlock hyperextension while loaded | LF 89°, RF 102° | LF 52°, RF 56° (limit ~60; rest 28/31) |
@@ -377,13 +440,13 @@ Run: `python3 tools/clips/actions.py --no-render` (~6 s: builds on `build/stage_
 **Open:**
 - Death's topple from tipping start to impact is 22 frames (gravity from a 5° lean at 1.5°/f). The GiM reference
   drops in ~13-15 frames with a looser, leg-splaying collapse.
-- CalfSetup.cs (Death → Translate) needs the usual Unity compile check. No in-place Leap and no Dead_Idle loop.
+- CalfSetup.cs (Death → Translate) needs the usual Unity compile check (OI-01). No in-place Leap (OI-08) and no Dead_Idle loop (OI-09).
 - Leap: the hind hocks absorb to ~85-89° for 2-3 frames after landing. The Death trunk impact is a one-frame stop
   (Body tail point 143 mm/f² at f33; intended).
 
 ### 2026-09-28: clip families finished, library fixes, one-command build
 - **Clip families** (workflow: author → adversarial review → fix):
-  - idle_graze passed review. 8 minor findings are still open: muzzle about 4 cm above the grass, a one-frame tear jerk, abrupt step lift-off, a weak tail swish, no mouth interior, and a backward step in Graze_End.
+  - idle_graze passed review. Its 8 minor findings are still open (OI-12..19): muzzle about 4 cm above the grass, right fore over at the knee in GRAZE, abrupt step lift-off, a one-frame tear jerk, the swing hoof grazing the ground on LOD2, a weak tail swish, no mouth interior, and a backward step in Graze_End.
   - lying fixed 3 major + 2 minor (joint limits, fore legs stretched forward in LYING, knee lock 0.04 mm, hoof pivots). It keys the PoleTarget helpers per frame; these are dropped on export.
   - actions fixed 4 major + 6 minor. Death is now a gravity topple over the right hooves, with root motion to the right so the capsule follows the body (`CalfSetup.cs`: Death is `RootMotion.Translate`). The Leap landing is smoothed.
   - Details and QA tables: `docs/anim_lying.md` and the family entries above.
@@ -392,3 +455,46 @@ Run: `python3 tools/clips/actions.py --no-render` (~6 s: builds on `build/stage_
   - `keyed_pose_fn` "hold" keys now have a true zero tangent.
 - **The security warning from the workflow was benign:** the harness blocked a subagent's foreground `sleep 200`. Nothing was pushed or deleted by agents.
 - **`tools/build_all.sh`** runs the whole pipeline (A → B → textures → fur textures → animations → export → validate).
+
+### 2026-09-28: final review, docs lens (fixes DOC-01..14)
+**What:** the docs were brought up to the checkpoint-01 state, so that a new agent reads current facts first.
+- `docs/WORKLOG.md`: the "Current status" table was rewritten from the checkpoint (21 clips; 175 PASS with renders / 172
+  without; every family done and reviewed; Unity verification not done; final review in progress). There is now one
+  "Open issues" table (OI-01..34) that merges the 9 "Open:" blocks, the README "Known issues" and the PLAN gaps. Fixed
+  items are closed there, and the dated entries are annotated (smoothing done in 813faea, Death root motion, the
+  Leap clamp, the GRAZE re-check, the idle_graze minors listed as 8, the stale `Pose()` clamp facts, the scratch
+  harness paths). The checkpoint row now says 175 PASS (172 without `--render-dir`).
+- `CLAUDE.md`: a "Do not" list for the pipeline traps (OI-27..29, OI-33), a "Verification gate" with per-line limits and
+  known values, the fast family QA commands, the authoring and export rigs as separate bone lists, the `Pose` sign
+  conventions, a "References" summary, an "Extending" section (new family, coat change, re-export), docs.unity3d.com
+  blocked (use WebSearch), a render budget of ≤12 samples, and a measured build time of 375 s.
+- `docs/REFERENCES.md` (new): the reference files with resolution/fps, a timestamp index of `videoplayback (1).mp4`
+  (checked on a contact sheet: the video cuts from Death straight to lying and shows no lie-down), the user's close-up
+  spec as a checklist, and a frame-grab command.
+- `docs/anim_lying.md`: the reach clamp is 0.9985 × chain and `Pose()` equals the rest pose; the rest carpus is 10.4°;
+  the QA table was refreshed; the standalone command now carries `--render none --scratch`.
+- `docs/PLAN.md`: a status per deliverable and per phase, Call/HeadShake added, and the deviations stated (fur cards
+  and landmark normal detail not started; no persistent IK rig; a Speed-only blend tree).
+- Tool docstrings: `calf_animations.py` (no `--only`, stage C input, the rebaked side effect, what the QA table does not
+  measure), `calf_stage_b.py` (46 bones), `export_unity.py` (Height not copied, no resolution check, scratch dev
+  command), `calf_textures.py` (dev command on the current stage B), `silhouette_compare.py` (bounding-box scaling),
+  `render_views.py` (FBX action names, silent rest pose, sample budget), and the `anim_lib.Pose` sign comments
+  (ears, head roll, spine roll).
+
+**Verification** (everything written to the session scratchpad `review/docs_fix/`, nothing to `build/` or `Unity/Calf/`):
+- Family QAs re-run with the HEAD (137fb8b) tools on the 15:00 `build/stage_b.blend`: lying `JOINT limits: all OK`, seams
+  0.000 mm; LOD2 non-hoof min z -0.7 / -0.9 / -0.7 cm; standing carpus 10.6°. idle_graze: carpus from 10.4°, boundaries
+  0.0000, Graze_Loop nose pad 3.27-6.23 cm. actions: REACH -0.4 mm, Death root 0.787 m, Leap 1.447 m. About 5 s each.
+- FK probe (HEAD `anim_lib`): ears y+20 moves the tip 72 mm down and x+20 moves it 71 mm forward; tail side+10 moves
+  Tail7 47 mm to -X; spine roll + lowers the left ear, body roll + the right one, head roll + the left one.
+- Rig probe: stage B/C 46 bones with the feet under `Root`; stage D feet under the lower legs; `Body` head z 0.205 m;
+  LOD0 top at the withers (z 1.014, y -0.28; ear tips 0.977); LOD0/LOD1 up to 7 influences, LOD2 4.
+- The documented recipes were run: a re-export into a scratch folder plus validation gives 172 PASS / 0 FAIL / 1 WARN
+  (Gallop f14 23.691 mm), the same as the checkpoint, with `Unity/Calf` and `build/logs` untouched. The texture
+  preview loop at 1024 takes 19 s cold and 12 s cached. The frame-grab one-liner works. `calf_animations.py --only`
+  is rejected by argparse.
+
+**Not fixed here** (code, or files owned by other lenses; handed to the orchestrator): the code side of OI-27..33, the
+stale 0.992 / "~2 mm" clamp facts in the `tools/clips/{idle_graze,actions,lying}.py` docstrings and comments, the
+`tools/clips/__init__.py` docstring, and the stale `Unity/Calf/README.md` items (the 12 mm hoof note, 172 vs 175 PASS,
+the "ear tips" height).

@@ -3,13 +3,17 @@
 Usage
   python3 tools/calf_textures.py --in build/stage_b.blend --out build/stage_c.blend \
           --tex-dir build/textures --res 4096
-  (dev)   python3 tools/calf_textures.py --in build/stage_b_snapshot_v1.blend --out build/stage_c_tex_test.blend \
-          --tex-dir build/textures_test --res 2048 [--cache scratch/bake.npz] [--preview scratch/prev.png]
+  (dev)   python3 tools/calf_textures.py --in build/stage_b.blend --out <scratch>/stage_c_test.blend \
+          --tex-dir <scratch>/tex --res 1024 --cache <scratch>/bake1024.npz --preview <scratch>/prev.png --textures-only
+          (~20 s, ~12 s once the cache exists; delete the cache after any stage-B change. --textures-only skips the
+          normal-map bake and the blend save.)
 
 Pipeline
   1. Cycles bakes REST-POSE data from Calf_LOD0 (armature ignored; eyeball faces excluded):
      object-space position, object-space normal, face attribute "orig_part", per-vertex bone-region weights
-     (from the skin vertex groups) into 32-bit float images, plus ambient occlusion.  UV coverage mask kept.
+     (from the skin vertex groups; REGIONS incl. the stage B jaw / ear bones, 3 per image) into 32-bit float images,
+     plus ambient occlusion.  UV coverage mask kept.  Mesh landmarks also give the eyelid edge (socket boundary
+     loops) and the mouth line (Jaw-weight 0.5 isoline).
   2. numpy: the red-pied coat pattern is computed per texel from the 3D rest position.  Every patch is placed
      relative to landmarks read from the CalfRig rest bones and from the mesh (top/bottom line profile, eyes,
      nose pad), so the pattern follows later geometry edits.  Vectorised 3D Perlin fBm gives organic, slightly
@@ -187,7 +191,10 @@ def blur_masked(img, mask, sigma):
 # =====================================================================================================
 # scene access, landmarks
 # =====================================================================================================
-REGIONS = ["forearm", "fcannon", "thigh", "gaskin", "hcannon", "tail", "head", "neck", "torso"]
+# baked 3 per RGB image (wA, wB, wC, wD). "jaw"/"ear" are the stage B Jaw / Ear.L|R bones: HEAD regions, kept separate
+# so the texture can find the mouth and the ears exactly ("_pad" is always 0).
+REGIONS = ["forearm", "fcannon", "thigh", "gaskin", "hcannon", "tail", "head", "neck", "torso", "jaw", "ear", "_pad"]
+W_IMAGES = ["w" + "ABCD"[k] for k in range(len(REGIONS) // 3)]
 
 
 def region_of(bone_name):
@@ -199,8 +206,27 @@ def region_of(bone_name):
     if b in ("BackLowerLeg", "IKBackLeg", "FFB"): return 4
     if b.startswith("Tail"): return 5
     if b == "Head": return 6
+    if b == "Jaw": return 9                        # stage B bones: head regions, not torso
+    if b == "Ear": return 10
     if b.startswith("Neck"): return 7
     return 8
+
+
+def group_fraction(ob, me, name):
+    """per-vertex normalised weight of one vertex group (0 where absent)"""
+    gi = ob.vertex_groups.get(name)
+    out = np.zeros(len(me.vertices), np.float32)
+    if gi is None:
+        return out
+    for v in me.vertices:
+        tot = 0.0; w = 0.0
+        for g in v.groups:
+            tot += g.weight
+            if g.group == gi.index:
+                w = g.weight
+        if tot > 0:
+            out[v.index] = w / tot
+    return out
 
 
 def rest_mesh(ob):
@@ -237,7 +263,8 @@ def mesh_arrays(ob, me=None):
             if g.group in names and g.weight > 0:
                 W[v.index, region_of(names[g.group])] += g.weight
     s = W.sum(1, keepdims=True)
-    W = np.where(s > 0, W / np.maximum(s, 1e-9), np.eye(len(REGIONS), dtype=np.float32)[-1])
+    W = np.where(s > 0, W / np.maximum(s, 1e-9), np.eye(len(REGIONS), dtype=np.float32)[REGIONS.index("torso")])
+    W[:, 6] += W[:, 9] + W[:, 10]          # column 6 = whole head (skull + jaw + ears); 9 / 10 hold the parts
     return co, part, ls, lt, lv, W
 
 
@@ -249,7 +276,7 @@ def verts_of_part(part, ls, lt, lv, k):
     return np.unique(idx)
 
 
-def compute_landmarks(arm, lod0, co, part, ls, lt, lv, W):
+def compute_landmarks(arm, lod0, co, part, ls, lt, lv, W, Wj=None):
     M = lod0.matrix_world.inverted() @ arm.matrix_world
     bone = {}
     for b in arm.data.bones:
@@ -315,6 +342,54 @@ def compute_landmarks(arm, lod0, co, part, ls, lt, lv, W):
     else:
         A = np.array([0.0, poll[1], LM["head_top_z"]]); Bp = A + np.array([0, -0.14, -0.1])
     LM["forehead_A"], LM["forehead_B"] = A, Bp
+    # --- eyelid edge: the open boundary loops of the coat mesh around each eye (densified polyline points) ----
+    fs = np.flatnonzero(part != 4)
+    ed = {}
+    for f in fs:
+        vs = lv[ls[f]:ls[f] + lt[f]]
+        for a, b in zip(vs, np.roll(vs, -1)):
+            k = (min(a, b), max(a, b)); ed[k] = ed.get(k, 0) + 1
+    bnd = np.array([k for k, n in ed.items() if n == 1], np.int64).reshape(-1, 2)
+    lid = []
+    for side in ("L", "R"):
+        c, r = eyes[side]
+        if len(bnd):
+            e = bnd[(np.linalg.norm(co[bnd[:, 0]] - c, axis=1) < 4 * r + 0.02)]
+            for t in np.linspace(0.0, 1.0, 6, endpoint=False):
+                lid.append(co[e[:, 0]] * (1 - t) + co[e[:, 1]] * t)
+    LM["lid_pts"] = np.concatenate(lid) if lid else np.zeros((0, 3))
+    # --- mouth line: the 0.5 isoline of the Jaw weight (where the mesh opens), front part, one polyline per side --
+    LM["mouth"] = []
+    if Wj is not None and "Jaw" in bone:
+        jh, jt = bone["Jaw"]
+        y_cut = jh[1] + 0.55 * (jt[1] - jh[1])           # front part of the hinge -> chin length (the isoline
+                                                          # rises toward the hinge; the lip line is the level part)
+        iso = (Wj > 0.3) & (Wj < 0.7) & (co[:, 1] < y_cut)
+        pts = co[iso]
+        if len(pts) > 20:
+            front = pts[np.abs(pts[:, 0]) < 0.012]
+            f0 = front[np.argmin(front[:, 1])] * np.array([0, 1, 1]) if len(front) else None
+            for s in (1, -1):
+                q = pts[pts[:, 0] * s > 0.004]
+                if len(q) < 5:
+                    continue
+                edges_y = np.arange(q[:, 1].min(), q[:, 1].max() + 0.004, 0.004)
+                poly = []
+                for y0 in edges_y[::-1]:                  # rear (commissure) -> front
+                    m = (q[:, 1] >= y0) & (q[:, 1] < y0 + 0.004)
+                    if m.any():
+                        poly.append(np.median(q[m], axis=0))
+                if f0 is not None:
+                    poly.append(f0)
+                if len(poly) >= 3:
+                    sm = np.array(poly)
+                    sd = np.abs(sm[:, 0]) > 0.03                 # side part: straight lip line (least-squares z(y))
+                    if sd.sum() >= 3:
+                        cz = np.polyfit(sm[sd, 1], sm[sd, 2], 1)
+                        sm[sd, 2] = np.polyval(cz, sm[sd, 1])
+                    for _ in range(4):                    # [1,2,1] smoothing, ends fixed (the bins wobble +-3 mm)
+                        sm[1:-1] = 0.25 * sm[:-2] + 0.5 * sm[1:-1] + 0.25 * sm[2:]
+                    LM["mouth"].append(sm)
     # --- misc bbox ----------------------------------------------------------------------------------
     LM["bbmin"], LM["bbmax"] = co.min(0), co.max(0)
     return LM
@@ -328,6 +403,8 @@ def lm_summary(LM):
         ("tailhead", b["Tail1"][0]), ("poll", b["Head"][0]), ("eyeL", LM["eyes"]["L"][0]), ("nose", LM["nose_c"])]}
     out["head_top_z"] = round(LM["head_top_z"], 3)
     out["forehead"] = [np.round(LM["forehead_A"], 3).tolist(), np.round(LM["forehead_B"], 3).tolist()]
+    out["lid_pts"] = len(LM.get("lid_pts", ()))
+    out["mouth"] = [[np.round(p[0], 3).tolist(), np.round(p[-1], 3).tolist(), len(p)] for p in LM.get("mouth", [])]
     return out
 
 
@@ -371,7 +448,7 @@ class Baker:
                 self.hidden.append(o); o.hide_render = True
         me = rest.copy(); me.name = "CalfBake_mesh"
         nv = len(me.vertices)
-        for k, nm in enumerate(("wA", "wB", "wC")):
+        for k, nm in enumerate(W_IMAGES):
             a = me.color_attributes.new(nm, "FLOAT_COLOR", "POINT")
             rgba = np.ones((nv, 4), np.float32); rgba[:, :3] = W[:, 3 * k:3 * k + 3]
             a.data.foreach_set("color", rgba.ravel())
@@ -511,7 +588,7 @@ def bake_data(baker, res, ao_res, ao_samples, ao_dist, bbmin, bbmax):
     D["part"] = np.rint(a[..., 0]).astype(np.int8)
     # region weights
     ws = []
-    for nm in ("wA", "wB", "wC"):
+    for nm in W_IMAGES:
         a = baker.bake(img, src=baker.attr(nm))
         ws.append(a[..., :3])
     D["w"] = np.concatenate(ws, -1).astype(np.float16)
@@ -593,6 +670,7 @@ class PatternCtx:
         self.elbow, self.knee = mid("FrontUpperLeg", 0), mid("FrontUpperLeg", 1)
         self.hip, self.stifle, self.hock = mid("BackLeg", 0), mid("BackLeg", 1), mid("BackUpperLeg", 1)
         self.tailpts = np.array([B["Tail1"][0]] + [B["Tail%d" % i][1] for i in range(1, 8)])
+        self.neck_a, self.neck_b = B["Neck1"][0], B["Neck3"][1]      # neck axis (withers -> poll)
         self.poll, self.headtip = B["Head"][0], B["Head"][1]
         self.eyeL, self.eyeR = LM["eyes"]["L"][0], LM["eyes"]["R"][0]
         self.r_eye = 0.5 * (LM["eyes"]["L"][1] + LM["eyes"]["R"][1])
@@ -603,22 +681,57 @@ class PatternCtx:
         Hb = float(np.interp(yq, LM["prof_y"], LM["prof_top"]) - np.interp(yq, LM["prof_y"], LM["prof_bot"]))
         self.sh = Hb / 0.53                                   # barrel height scale
         self.fa = min(230.0, 0.30 / texel)                    # across-strand frequency (texel-limited)
-        # ears (weighted ~50/50 Head/Neck3): found geometrically beside the skull above the eyes
+        # ears: texels of the stage B Ear.L/R bones (baked region weight); inner = old light part facing the cup side
         ear = self.ear_mask(P, w)
-        inner = ear & (part == 1) & (np.sign(P[:, 0]) * Nr[:, 0] < 0.55)   # concave side faces fwd/down
+        inner = ear & (part == 1) & self.inner_side(P, Nr)
         outer = ear & (part != 1)
         rs = np.random.RandomState(seed)
-        self.inner_pts = P[inner]; self.outer_pts = P[outer]
+        # (position, EAR_NK * normal): the ear is a thin leaf, so the back side lies only 1-3 cm behind the inner
+        # side; with the normal term, opposite-facing texels count as >= 2*EAR_NK away and the inner/outer
+        # distances are measured across the same face (to the real inner/outer border), not through the leaf
+        self.inner_pts = self.ear6(P[inner], Nr[inner]); self.outer_pts = self.ear6(P[outer], Nr[outer])
         if len(self.outer_pts) > 6000:
             self.outer_pts = self.outer_pts[rs.choice(len(self.outer_pts), 6000, replace=False)]
         if len(self.inner_pts) > 6000:
             self.inner_pts = self.inner_pts[rs.choice(len(self.inner_pts), 6000, replace=False)]
+        # hooves: coat texels along the hoof/pastern border (for the coronet band), per-hoof centre x
+        hv = part == 2
+        self.hoof_rim = np.zeros((0, 3)); self.hoof_cx = {}
+        if hv.any():
+            Ph = P[hv]
+            y_split = 0.5 * (self.elbow[1] + self.hip[1])
+            for sx in (1, -1):
+                for fr in (True, False):
+                    m = (np.sign(Ph[:, 0]) == sx) & ((Ph[:, 1] < y_split) == fr)
+                    if m.any():
+                        self.hoof_cx[(sx, fr)] = float(np.median(Ph[m, 0]))
+            hs = Ph if len(Ph) <= 6000 else Ph[rs.choice(len(Ph), 6000, replace=False)]
+            zc = (part != 2) & (P[:, 2] < Ph[:, 2].max() + 0.012) & (part != 4)
+            Pc = P[zc]
+            if len(Pc):
+                near = min_dist_to_set(Pc, hs) < 0.004
+                self.hoof_rim = Pc[near]
+                if len(self.hoof_rim) > 6000:
+                    self.hoof_rim = self.hoof_rim[rs.choice(len(self.hoof_rim), 6000, replace=False)]
+        # eyelid edge points (texture lid rim is measured from the real socket boundary, not the eyeball sphere)
+        self.lid_pts = LM.get("lid_pts", np.zeros((0, 3)))
+        self.mouth = LM.get("mouth", [])
 
-    def ear_mask(self, P, w):
-        x, y, z = P[:, 0], P[:, 1], P[:, 2]
-        eL = self.eyeL
-        return (np.abs(x) > abs(eL[0]) + 0.028) & (z > eL[2]) & (y > eL[1] + 0.035) & \
-            (y < self.poll[1] + 0.09) & (w[:, 6] + w[:, 7] > 0.8)
+    EAR_NK = 0.008
+
+    @classmethod
+    def ear6(cls, P, Nr):
+        return np.concatenate([P, cls.EAR_NK * np.asarray(Nr, np.float64)], 1)
+
+    @staticmethod
+    def inner_side(P, Nr):
+        """inner-ear test: the cupped inner side faces forward / inward / down (not straight out)"""
+        return np.sign(P[:, 0]) * Nr[:, 0] < 0.8
+
+    @staticmethod
+    def ear_mask(P, w):
+        """ear texels: the baked Ear.L/Ear.R region weight (stage B ear bones)"""
+        return w[:, 10] > 0.3
 
 
 def coat_pattern(P, Nr, part, w, LM, texel, seed, chunk=1 << 20):
@@ -678,9 +791,10 @@ def _coat_chunk(ctx, P, Nr, part, w):
 
     # ---------------------------------------------------------------- patch layout (signed metric fields)
     # shoulder band (white): front / rear edge y as a function of depth below the top line
+    # (GiM: the neck-base orange runs unbroken into the shoulder and forearm; the band sits behind the arm)
     dts = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.7]) * sh
-    sbF = y_el + np.array([-0.19 * sn, -0.105 * s, -0.04 * s, 0.01 * s, 0.035 * s, 0.06 * s])
-    sbR = y_el + np.array([0.125, 0.115, 0.10, 0.12, 0.13, 0.14]) * s
+    sbF = y_el + np.array([-0.19 * sn + 0.08 * s, -0.005 * s, 0.06 * s, 0.11 * s, 0.085 * s, 0.06 * s])
+    sbR = y_el + np.array([0.155, 0.145, 0.13, 0.135, 0.13, 0.14]) * s
     yF_sb = np.interp(dt, dts, sbF); yR_sb = np.interp(dt, dts, sbR)
     # hip band (white)
     dth = np.array([0.0, 0.1, 0.2, 0.3, 0.45]) * sh
@@ -690,19 +804,26 @@ def _coat_chunk(ctx, P, Nr, part, w):
     # white belly/brisket height above the bottom line, along y
     by = np.array([y_el - 0.23 * s, y_el - 0.15 * s, y_el - 0.05 * s, y_el + 0.2 * s, 0.5 * (y_el + hip[1]),
                    stifle[1] - 0.12 * s, stifle[1], hip[1] + 0.1 * s])
-    bh = np.array([0.0, 0.10, 0.10, 0.065, 0.055, 0.09, 0.17, 0.22]) * sh
+    # (first value < 0: ahead of the chest the throat / neck underside stays orange)
+    bh = np.array([-0.06, 0.10, 0.10, 0.065, 0.055, 0.09, 0.17, 0.22]) * sh
     hb = np.interp(yw, by, bh)
     z_rb = stifle[2] + 0.075 * sh                  # lower limit of the orange rump
     s_tail, _, L_tail = polyline_param(P, ctx.tailpts)
 
     f1 = yw - yF_sb                                        # head / neck / shoulder / forearm orange
-    f1 = np.maximum(f1, np.where(torso + legF > 0.5, hb - db, -1.0))    # white brisket + chest
+    # white brisket + chest: ventral / front-facing chest only, so it does not cut across the point of the
+    # shoulder and elbow (the orange forearm stays connected to the shoulder, as on GiM)
+    lat_b = np.sign(x) * nx
+    brisk = (torso + legF > 0.5) & ((np.abs(x) < 0.07) | (lat_b < 0.45))
+    f1 = np.maximum(f1, np.where(brisk, hb - db, -1.0))
+    del lat_b, brisk
     knee_edge = knee[2] + 0.012 + 0.012 * NZ[8].noise(P * 28.0, 3)
     f1 = np.maximum(f1, knee_edge - zw)                    # white below the knees
     f2 = np.maximum.reduce([yR_sb - yw, yw - yF_hb, hb - db])           # barrel
     f2 = np.maximum(f2, (0.5 - torso) * 0.1)
     f3 = np.maximum(yR_hb - yw, z_rb - zw)                 # rump (incl. the tail root)
-    s_tb = 0.45 + 0.04 * NZ[8].noise(P * 20.0, 4)
+    s_tb = 0.64 + 0.03 * NZ[8].noise(P * 20.0, 4)    # white only on the lower ~40 % of the hanging tail + switch
+    m_sw = tailm * smoothstep(-0.03, 0.08, s_tail - s_tb)   # switch (long clumped hair) for the height map
     f5 = np.maximum((0.5 - tailm) * 0.1, (s_tail - s_tb) * L_tail)     # orange tail base
     f_tw = np.maximum((0.5 - tailm) * 0.1, (s_tb - s_tail) * L_tail)   # white rest of the tail (cut)
     # forearms: fully orange on the right leg, lateral/front only on the left leg
@@ -723,11 +844,14 @@ def _coat_chunk(ctx, P, Nr, part, w):
     del f1, f2, f3, f4, f5, f6, f7, f_tw, yF_sb, yR_sb, yF_hb, yR_hb, lat, fa_top, s_tail, s_tb
     # forehead blaze (white) cut from the orange: jagged, tuft-like tapered capsule along the forehead
     # midline, from the crown above the poll down to just above eye level
+    # GiM: a broad fluffy shield (~60 % of the forehead width) from the poll down to eye level
     fA, fB = LM["forehead_A"], LM["forehead_B"]
+    fB = fB + (fB - fA) * 0.22
     fA = fA + (fA - fB) * 0.18
     tb, db_ = seg_param(P, fA, fB)
-    f_bl = db_ - np.interp(tb, [0.0, 0.2, 0.5, 1.0], [0.05, 0.07, 0.052, 0.022]) * sn
-    f_bl = f_bl + 1.2 * edge + 0.0055 * NZ[3].noise(aniso(P, fB - fA, 170.0, 40.0), 6)
+    f_bl = db_ - np.interp(tb, [0.0, 0.2, 0.5, 1.0], [0.075, 0.095, 0.072, 0.03]) * sn
+    f_bl = f_bl + 0.7 * edge + 0.0055 * NZ[3].noise(aniso(P, fB - fA, 170.0, 40.0), 6)
+    m_tuft = smoothstep(0.004, -0.02, f_bl) * headm              # blaze core: longer, clumped hair (height map)
     headish = np.maximum(headm, smoothstep(poll[1] + 0.08, poll[1] + 0.03, y) * (wh + wn > 0.8))
     f_bl = np.maximum(f_bl, (0.5 - headish) * 0.1)
     f_or = np.maximum(f_or, -f_bl)
@@ -737,7 +861,8 @@ def _coat_chunk(ctx, P, Nr, part, w):
     del f_or
 
     # ---------------------------------------------------------------- colours
-    C_OR = srgb2lin([203, 112, 45]); C_OR_RED = srgb2lin([188, 92, 36]); C_OR_LT = srgb2lin([218, 144, 74])
+    # orange/white ratio matched to the Gemini GiM side view (was 203,112,45: too red, too little G/B)
+    C_OR = srgb2lin([200, 122, 62]); C_OR_RED = srgb2lin([186, 102, 52]); C_OR_LT = srgb2lin([216, 150, 88])
     C_WH = srgb2lin([236, 232, 224]); C_WH_GREY = srgb2lin([214, 208, 202]); C_DIRT = srgb2lin([176, 165, 150])
     lf1 = NZ[9].fbm(P, 3.0, 3); lf2 = NZ[10].fbm(P, 11.0, 2)
     hue = smoothstep(-1.2, 1.2, NZ[11].fbm(P, 1.6, 2))[:, None]
@@ -758,7 +883,7 @@ def _coat_chunk(ctx, P, Nr, part, w):
     white = C_WH * (1.0 + 0.02 * lf1 + 0.012 * lf2)[:, None]
     m_wgrey = np.clip(np.clip(-nzn, 0, 1) * torso * 0.5 + 0.35 * smoothstep(0.5, 0.0, np.abs(lf1)) * 0.3, 0, 1)
     white = white * (1 - m_wgrey[:, None]) + C_WH_GREY * m_wgrey[:, None]
-    m_dirt = smoothstep(0.15, 0.04, z) * np.clip(legF + legH, 0, 1) * (0.55 + 0.25 * lf2)
+    m_dirt = smoothstep(0.15, 0.04, z) * np.clip(legF + legH, 0, 1) * (0.32 + 0.15 * lf2)   # pastern stays paler than the hoof
     white = white * (1 - m_dirt[:, None]) + C_DIRT * m_dirt[:, None]
     white = white * (1 + 0.045 * strand)[:, None]
     # brisket speckles (grey-orange flecks in the white chest)
@@ -774,20 +899,50 @@ def _coat_chunk(ctx, P, Nr, part, w):
     dn = box_dist(P, LM["nose_min"], LM["nose_max"])
     m_ring = smoothstep(0.045 * sn, 0.01, dn) * headm * M_or
     col = col * (1 - 0.45 * m_ring[:, None]) + srgb2lin([212, 146, 94]) * (0.45 * m_ring[:, None])
-    # dark eyelid rim right at the socket
-    m_lid = smoothstep(0.009, 0.002, dE) * headm
-    col = col * (1 - 0.85 * m_lid[:, None]) + srgb2lin([52, 30, 22]) * (0.85 * m_lid[:, None])
+    # eyelids (GiM: pale whitish-pink rim around a dark eye, then a soft darker ring into the coat), measured from
+    # the real socket boundary (the socket is not concentric with the eyeball, so dE alone gives an uneven rim)
+    near_eye = (dE < 0.03) & (headm > 0.05)
+    dL = np.full(len(P), 1.0)
+    if near_eye.any() and len(ctx.lid_pts):
+        dL[near_eye] = min_dist_to_set(P[near_eye], ctx.lid_pts)
+    m_lid = smoothstep(0.0034, 0.0016, dL) * headm
+    m_lid2 = smoothstep(0.010, 0.0034, dL) * headm * (1 - m_lid)
+    col = col * (1 - 0.5 * m_lid2[:, None]) + srgb2lin([70, 38, 22]) * (0.5 * m_lid2[:, None])
+    col = col * (1 - 0.8 * m_lid[:, None]) + srgb2lin([226, 200, 186]) * (0.8 * m_lid[:, None])
+    del m_lid2, near_eye
+    # mouth line (dark, ~3 mm) along the Jaw-weight isoline, pale-pink lower lip just below it near the front
+    m_mouth = np.zeros(len(P), np.float32); m_lip = np.zeros(len(P), np.float32)
+    if ctx.mouth:
+        mbox = (headm > 0.3) & (z < max(pl[:, 2].max() for pl in ctx.mouth) + 0.02) & \
+               (y < max(pl[:, 1].max() for pl in ctx.mouth) + 0.01)
+        if mbox.any():
+            Pm = P[mbox]
+            best_d = np.full(len(Pm), np.inf); best_t = np.zeros(len(Pm)); best_z = np.zeros(len(Pm))
+            for pl in ctx.mouth:
+                seglen = np.linalg.norm(np.diff(pl, axis=0), axis=1); cum = np.concatenate([[0.0], np.cumsum(seglen)])
+                for i in range(len(pl) - 1):
+                    t, d = seg_param(Pm, pl[i], pl[i + 1])
+                    m = d < best_d
+                    best_d[m] = d[m]; best_t[m] = (cum[i] + t[m] * seglen[i]) / cum[-1]
+                    best_z[m] = pl[i][2] + t[m] * (pl[i + 1][2] - pl[i][2])
+            taper = smoothstep(0.0, 0.25, best_t)                 # fades out toward the commissure
+            m_mouth[mbox] = smoothstep(0.0017, 0.0007, best_d) * taper
+            below = (Pm[:, 2] < best_z)
+            m_lip[mbox] = smoothstep(0.0065, 0.004, best_d) * (1 - smoothstep(0.0017, 0.0007, best_d)) * below * \
+                smoothstep(0.45, 0.8, best_t)
+    col = col * (1 - 0.75 * m_lip[:, None]) + srgb2lin([220, 180, 160]) * (0.75 * m_lip[:, None])
+    col = col * (1 - 0.85 * m_mouth[:, None]) + srgb2lin([60, 35, 25]) * (0.85 * m_mouth[:, None])
     # ears: inner side (old light part) pale pinkish tan, darker rim along the inner/outer boundary
     ear = ctx.ear_mask(P, w)
-    inner = ear & (part == 1) & (np.sign(x) * nx < 0.55)
+    inner = ear & (part == 1) & ctx.inner_side(P, Nr)
     outer = ear & (part != 1)
     m_in = np.zeros(len(P), np.float32); m_rim = np.zeros(len(P), np.float32)
     if inner.any():
-        d_o = min_dist_to_set(P[inner], ctx.outer_pts)
-        m_in[inner] = smoothstep(0.003, 0.012, d_o)
+        d_o = min_dist_to_set(ctx.ear6(P[inner], Nr[inner]), ctx.outer_pts)
+        m_in[inner] = smoothstep(0.003, 0.012, d_o) * smoothstep(0.3, 0.6, w[inner, 10])   # soft at the ear base
         m_rim[inner] = smoothstep(0.009, 0.002, d_o)
     if outer.any() and len(ctx.inner_pts):
-        m_rim[outer] = smoothstep(0.008, 0.001, min_dist_to_set(P[outer], ctx.inner_pts))
+        m_rim[outer] = smoothstep(0.008, 0.001, min_dist_to_set(ctx.ear6(P[outer], Nr[outer]), ctx.inner_pts))
     C_EAR = srgb2lin([214, 170, 142])
     col = col * (1 - m_in[:, None]) + (C_EAR * (1 + 0.1 * strand)[:, None]) * m_in[:, None]
     col = col * (1 - 0.7 * m_rim[:, None]) + srgb2lin([112, 54, 24]) * (0.7 * m_rim[:, None])
@@ -800,19 +955,45 @@ def _coat_chunk(ctx, P, Nr, part, w):
     rough = rough * (1 - m_in) + 0.72 * m_in
     rough = rough * (1 - m_lid) + 0.55 * m_lid
     height = 0.5 + (0.16 + 0.06 * torso) * strand + 0.07 * clump
+    # long hair: tail switch and forehead tuft read as clumped tufts (stronger clump + strand relief)
+    m_long = np.maximum(m_sw, m_tuft)
+    height = height + m_long * (0.06 * strand + 0.16 * clump)
+    # mid-frequency skin relief the fur bump can carry (wavelength <~4 cm): loose transverse skin folds on the
+    # lower neck / throat (GiM neck folds), strongest on the underside, fading toward the crest and the head
+    n1h, n3t = ctx.neck_a, ctx.neck_b
+    t_n, d_n = seg_param(P, n1h, n3t)
+    ax_n = (n3t - n1h) / max(np.linalg.norm(n3t - n1h), 1e-9)
+    fold = np.sin(2 * np.pi * ((P - n1h) @ ax_n / 0.034 + 0.35 * NZ[9].noise(P * 18.0, 14)))
+    m_fold = smoothstep(0.35, 0.8, wn) * smoothstep(0.1, 0.3, t_n) * (1 - smoothstep(0.75, 0.95, t_n)) * \
+        smoothstep(0.1, -0.4, nzn) * (1 - m_long)
+    height = height + 0.13 * fold * m_fold
+    height = height - 0.18 * m_mouth                               # the mouth line is a crease
+    del m_long, t_n, d_n, fold, m_fold, m_sw, m_tuft
 
-    # ---------------------------------------------------------------- hooves (orig_part 2): pale horn (white-legged calf,
-    # see the GiM young-cow HD frames), vertical growth streaks, darker/dirtier toward the ground
+    # ---------------------------------------------------------------- hooves (orig_part 2): warm horn, clearly darker
+    # than the white pastern (GiM HD frames: hoof ~20 % darker than the pastern), a lighter coronet band at the hair
+    # line, a dark cleft line down the front between the claws, vertical growth streaks, dirtier toward the ground
     hi = np.flatnonzero(part == 2)
     if len(hi):
         Ph = P[hi]; zh = Ph[:, 2]
         ring = np.sin(2 * np.pi * (zh / 0.0035 + 0.6 * NZ[6].noise(Ph * 60.0, 8)))
         streak = NZ[6].noise(Ph * np.array([220.0, 220.0, 25.0]), 13)
-        hc = srgb2lin([204, 184, 166]) * (1.0 + 0.08 * NZ[6].fbm(Ph, 40.0, 2) + 0.03 * ring + 0.05 * streak)[:, None]
+        hc = srgb2lin([158, 132, 110]) * (1.0 + 0.08 * NZ[6].fbm(Ph, 40.0, 2) + 0.03 * ring + 0.05 * streak)[:, None]
         dirt = smoothstep(0.03, 0.0, zh)
-        col[hi] = hc * (1 - 0.30 * dirt)[:, None] + srgb2lin([120, 100, 85]) * (0.18 * dirt)[:, None]
-        rough[hi] = 0.55 + 0.05 * NZ[6].noise(Ph * 30.0, 10) + 0.1 * dirt
-        height[hi] = 0.5 + 0.05 * ring + 0.05 * NZ[6].noise(Ph * 90.0, 11)
+        hc = hc * (1 - 0.30 * dirt)[:, None] + srgb2lin([120, 100, 85]) * (0.18 * dirt)[:, None]
+        cor = np.zeros(len(hi), np.float32)
+        if len(ctx.hoof_rim):
+            cor = smoothstep(0.0055, 0.0035, min_dist_to_set(Ph, ctx.hoof_rim)).astype(np.float32)
+        hc = hc * (1 - 0.8 * cor[:, None]) + srgb2lin([178, 158, 138]) * (0.8 * cor[:, None])
+        y_split = 0.5 * (elbow[1] + hip[1])
+        cx = np.zeros(len(hi))
+        for (sx, fr), v in ctx.hoof_cx.items():
+            cx[(np.sign(Ph[:, 0]) == sx) & ((Ph[:, 1] < y_split) == fr)] = v
+        cleft = smoothstep(0.0013, 0.0006, np.abs(Ph[:, 0] - cx)) * smoothstep(-0.2, -0.5, Nr[hi, 1]) * (1 - cor)
+        hc = hc * (1 - 0.85 * cleft[:, None]) + srgb2lin([60, 45, 35]) * (0.85 * cleft[:, None])
+        col[hi] = hc
+        rough[hi] = 0.55 + 0.05 * NZ[6].noise(Ph * 30.0, 10) + 0.1 * dirt + 0.15 * cor
+        height[hi] = 0.5 + 0.05 * ring + 0.05 * NZ[6].noise(Ph * 90.0, 11) - 0.25 * cleft
     # ---------------------------------------------------------------- nose pad (orig_part 3)
     ni = np.flatnonzero(part == 3)
     if len(ni):
@@ -823,14 +1004,17 @@ def _coat_chunk(ctx, P, Nr, part, w):
         nrad = 0.5 * (nmax - nmin)
         nost = np.zeros(len(ni), np.float32); nin = np.zeros(len(ni), np.float32)
         for sx in (-1, 1):   # nostrils: pink surround, darker opening (no nostril geometry on the mesh)
-            c = np.array([sx * 0.56 * nrad[0], nmin[1] + 0.3 * nrad[1], nc_c[2] - 0.02 * nrad[2]])
+            # GiM: large dark comma nostrils, ~1/4 of the pad width each, at the sides of the pad
+            c = np.array([sx * 0.60 * nrad[0], nmin[1] + 0.3 * nrad[1], nc_c[2] + 0.02 * nrad[2]])
             q = Pn - c
-            q[:, 0] += 0.25 * sx * q[:, 2]          # comma: slit leans outwards towards the bottom
-            e = ell(q, np.zeros(3), np.array([0.26, 0.55, 0.50]) * nrad)
-            nost = np.maximum(nost, smoothstep(1.35, 0.85, e))
-            nin = np.maximum(nin, smoothstep(0.85, 0.45, e))
+            zt = q[:, 2] / nrad[2]
+            q[:, 0] += sx * (0.45 * q[:, 2] - 0.35 * nrad[0] * zt * zt)   # comma: leans out at the bottom, head curls in
+            e = ell(q, np.zeros(3), np.array([0.30, 0.72, 0.72]) * nrad)
+            e = e / (1.0 + 0.35 * np.clip(zt, 0, 1))  # wider rounded head at the top-inside, tapering tail below
+            nost = np.maximum(nost, smoothstep(1.3, 0.9, e))
+            nin = np.maximum(nin, smoothstep(0.95, 0.6, e))
         nc = nc * (1 - 0.55 * nost[:, None]) + srgb2lin([204, 132, 124]) * (0.55 * nost[:, None])
-        nc = nc * (1 - 0.9 * nin[:, None]) + srgb2lin([72, 40, 40]) * (0.9 * nin[:, None])
+        nc = nc * (1 - 0.95 * nin[:, None]) + srgb2lin([58, 32, 32]) * (0.95 * nin[:, None])
         col[ni] = nc
         rough[ni] = 0.50 - 0.06 * peb - 0.12 * nost
         height[ni] = 0.42 + 0.28 * peb * (1 - nin) - 0.3 * nin
@@ -905,7 +1089,8 @@ def eye_texture(res, seed):
     q2 = np.stack([np.cos(ang) * 30.0, np.sin(ang) * 30.0, ri * 3.0], -1).reshape(-1, 3)
     fib2 = nz.noise(q2, 1).reshape(res, res)
     blot = nz.noise(np.stack([du * 14, dv * 14, np.zeros_like(du)], -1).reshape(-1, 3), 2).reshape(res, res)
-    C_IRIS = srgb2lin([116, 58, 20]); C_IRIS_IN = srgb2lin([142, 80, 28]); C_IRIS_OUT = srgb2lin([72, 35, 12])
+    # GiM: big DARK amber-brown eyes (the old 116,58,20 read light orange behind the glossy cornea)
+    C_IRIS = srgb2lin([74, 40, 20]); C_IRIS_IN = srgb2lin([96, 54, 26]); C_IRIS_OUT = srgb2lin([44, 24, 12])
     C_LIMB = srgb2lin([30, 16, 8]); C_PUP = srgb2lin([7, 5, 4]); C_SCL = srgb2lin([150, 118, 96])
     C_RIM = srgb2lin([34, 22, 17])
     t_in = smoothstep(0.75, 0.25, (ri - 0.2) / 0.8)[..., None]
@@ -1032,13 +1217,14 @@ def main(argv):
     rest = rest_mesh(lod0)
     co, part_f, ls, lt, lv, Wv = mesh_arrays(lod0, rest)
     log("rest mesh: %d verts, %d faces" % (len(rest.vertices), len(rest.polygons)))
-    LM = compute_landmarks(arm, lod0, co, part_f, ls, lt, lv, Wv)
+    Wj = group_fraction(lod0, rest, "Jaw")
+    LM = compute_landmarks(arm, lod0, co, part_f, ls, lt, lv, Wv, Wj)
     log("landmarks", lm_summary(LM))
 
     D = None
     if a.cache and os.path.exists(a.cache):
         z = np.load(a.cache)
-        if int(z["res"]) == R:
+        if int(z["res"]) == R and z["w"].shape[-1] == len(REGIONS):
             D = {k: z[k] for k in z.files}
             log("loaded bake cache", a.cache)
     if D is None:
@@ -1105,7 +1291,7 @@ def main(argv):
     del base, rough_img, ao_img, ao_up, ao_lo, smooth, zero, eye, col, rough, height
     D.clear()
     baker = Baker(lod0, rest, Wv)
-    dist = 0.2 / dbg["fa"]
+    dist = 0.6 / dbg["fa"]      # ~2.6 mm at 4K: readable hair strands (0.2/fa gave a 5 deg mean tilt, invisible)
     nb = baker.bake_normal(height_img, dist, R)
     baker.cleanup()
     n = nb[..., :3] * 2 - 1

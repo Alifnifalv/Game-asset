@@ -3,28 +3,40 @@
 Usage
   python3 tools/validate_export.py --fbx Unity/Calf/Calf.fbx --glb Unity/Calf/Calf.glb --src build/stage_d.blend
           [--json report.json] [--render-dir DIR] [--tol-mm 1.0] [--no-gltf-validator] [--node-dir build/node_tools]
+          [--samples 0] [--no-skin-frames] [--twist-limb-deg 15] [--skin-warn-mm 10] [--skin-fail-mm 60]
 
 Prints one PASS / FAIL / WARN / INFO line per check (with the measured numbers) and exits 1 if any check FAILs.
+Runs in about a minute (plus ~3 min with --render-dir): every check below looks at EVERY frame of every clip.
 
 Checks
-  source      bones, LOD triangle counts, rest bounding box, actions + frame ranges, reference bone world positions
-              (pose reset to rest, NLA off, one action at a time: unkeyed channels = rest pose).
+  source      bones, LOD triangle counts, rest bounding box, actions + frame ranges, bone world matrices on every frame
+              (pose reset to rest, NLA off, one action at a time: unkeyed channels = rest pose).  Each bone is compared
+              through three points: its head, its tail point M @ (0, L, 0) and an off-axis point M @ (OFF_AXIS, 0, 0),
+              so a roll about the bone axis is caught as well as a wrong joint position.
+  anim        twist continuity per clip: the twist of every bone about its own axis between consecutive frames (FAIL
+              > --twist-limb-deg for leg/hoof bones: an IK roll flip keeps every joint in place but candy-wraps the
+              forearm; WARN > --twist-warn-deg for any bone) and relative to its parent (FAIL > --twist-local-deg).
   FBX (raw)   the file is parsed directly (no Blender importer involved), i.e. what Unity's FBX SDK reads:
               axis system + UnitScaleFactor, transforms of the nodes above the skeleton (Unity root scale / rotation),
               only calf nodes (no camera / light), skeleton joints == source bones (minus dropped helpers), no leaf
               bones, per-LOD triangle counts, normals / tangents / binormals / UV layers, skin clusters (influences <=
-              4, weight sums), takes (names, LocalStart/Stop -> frame ranges), and every take evaluated with FBX
-              transform maths (T * Rpre * R(XYZ) * S) -> bone world positions compared with the source, both in
-              Blender space and reported in Unity space (X mirrored) for the facing check; materials and texture
-              file references.
+              4, weight sums, joints without weights), takes (names, LocalStart/Stop -> frame ranges), and every take
+              evaluated with FBX transform maths (T * Rpre * R(XYZ) * S) on every frame -> bone points compared with the
+              source; the Root curve per take on every frame in Unity space (travel, yaw, height, pitch/roll); facing;
+              materials and texture file references.
+  skin        the shipped skins evaluated with the engines' own maths on EVERY frame of every clip (FBX: cluster
+              TransformLink bind + take curves, every LOD; GLB: joints + inverse bind matrices, LOD0) against the
+              Blender source mesh (all influences, what the clip QA and previews show): the effect of the 4-influence
+              limit.  PASS <= --skin-warn-mm, WARN <= --skin-fail-mm, FAIL above (broken weights or bones).
   FBX (Blender re-import into a fresh scene)  bones, LOD objects + triangle counts, vertex-group influences and
-              sums, rest dimensions, facing, actions + frame ranges, bone world positions per sampled frame vs source,
-              LOD0 skinned-vertex deviation vs source (effect of the 4-influence limit), materials + images.
+              sums, rest dimensions, facing, actions + frame ranges, bone points per frame vs source, LOD0 skinned
+              vertices on 3 frames per clip (importer cross-check), materials + images.
   GLB (raw)   JSON + BIN parsed directly: skin joints, attributes (JOINTS_0/WEIGHTS_0 only, weight sums), triangle
-              count, animations (names, durations), glTF-native evaluation of every animation vs source, inverse bind
-              matrices vs rest pose, materials / embedded images.
-  GLB (Blender re-import)  bones, dimensions, facing, actions, bone world positions vs source.
+              count, animations (names, durations), glTF-native evaluation of every animation on every frame vs source,
+              inverse bind matrices vs rest pose, materials (single-sided) / embedded images (sizes, decoded VRAM).
+  GLB (Blender re-import)  bones, dimensions, facing, actions, bone points per frame vs source.
   Khronos glTF-Validator  (npm package gltf-validator, installed on first use into --node-dir) errors / warnings.
+  render      (--render-dir) contact sheets of the source, FBX and GLB on the same pose; their bounding boxes must agree.
 """
 import argparse, json, math, os, re, shutil, struct, subprocess, sys, time, zlib
 
@@ -217,6 +229,64 @@ class FbxScene:
             rm = rm @ Euler([math.radians(x) for x in post], "XYZ").to_matrix().to_4x4().inverted()
         return Matrix.Translation(Vector(t[:3])) @ rm @ Matrix.Diagonal(Vector(list(s[:3]) + [1.0]))
 
+    def model_order(self):
+        """model uids, parents before children"""
+        if getattr(self, "_order", None) is None:
+            order, seen = [], set()
+
+            def visit(u):
+                if u in seen:
+                    return
+                pu = self.model_parent.get(u, 0)
+                if pu in self.models:
+                    visit(pu)
+                seen.add(u)
+                order.append(u)
+            for u in self.models:
+                visit(u)
+            self._order = order
+        return self._order
+
+    def local_all(self, uid, over, T):
+        """local_matrix() for T samples at once: over = {prop: (T, 3) array}; returns (T, 4, 4) numpy"""
+        p = self.mprops[uid]
+
+        def get(prop, dflt):
+            if over is not None and prop in over:
+                return np.asarray(over[prop], np.float64)
+            return np.tile(np.array(list(p.get(prop, dflt))[:3], np.float64), (T, 1))
+        t, r, s = get("Lcl Translation", [0, 0, 0]), get("Lcl Rotation", [0, 0, 0]), get("Lcl Scaling", [1, 1, 1])
+        R = np_euler_xyz(r)
+        pre = p.get("PreRotation")
+        if pre and any(abs(x) > 1e-9 for x in pre):
+            R = np_euler_xyz(np.array([list(pre)[:3]]))[0] @ R
+        post = p.get("PostRotation")
+        if post and any(abs(x) > 1e-9 for x in post):
+            R = R @ np_euler_xyz(np.array([list(post)[:3]]))[0].T
+        M = np.zeros((T, 4, 4))
+        M[:, :3, :3] = R * s[:, None, :]
+        M[:, :3, 3] = t
+        M[:, 3, 3] = 1.0
+        return M
+
+    def world_all(self, curves, times):
+        """{model uid: (T, 4, 4)} world matrices at FBX times `times` (KTime) with linear key interpolation (the curves
+        carry one key per frame, so the sampled frames are exact keys)"""
+        times = np.asarray(times, np.float64)
+        T = len(times)
+        W = {}
+        for u in self.model_order():
+            over = None
+            if curves is not None and u in curves:
+                over = {}
+                for prop, (dflt, chans) in curves[u].items():
+                    over[prop] = np.stack([np.interp(times, c[0].astype(np.float64), c[1]) if c is not None
+                                           else np.full(T, float(dflt[i])) for i, c in enumerate(chans)], 1)
+            L = self.local_all(u, over, T)
+            pu = self.model_parent.get(u, 0)
+            W[u] = (W[pu] @ L) if pu in W else L
+        return W
+
     def stacks(self):
         return [u for u, n in self.objs.items() if n.name == "AnimationStack"]
 
@@ -301,6 +371,58 @@ class Glb:
         return arr
 
 
+def glb_world_all(G, an, times):
+    """(N, T, 4, 4) world matrices of every glTF node at `times` (s) of animation `an` (None = rest).  LINEAR samplers
+    are interpolated component-wise (quaternions re-normalised; exact on the keys, and the exporter samples every
+    frame), STEP holds, CUBICSPLINE uses the key values."""
+    J = G.json
+    nodes = J["nodes"]
+    N, T = len(nodes), len(times)
+    times = np.asarray(times, np.float64)
+    trs = []
+    for n in nodes:
+        trs.append({"translation": np.tile(np.array(n.get("translation", [0, 0, 0]), np.float64), (T, 1)),
+                    "rotation": np.tile(np.array(n.get("rotation", [0, 0, 0, 1]), np.float64), (T, 1)),
+                    "scale": np.tile(np.array(n.get("scale", [1, 1, 1]), np.float64), (T, 1))})
+    for ch in (an or {}).get("channels", []):
+        node, path = ch["target"].get("node"), ch["target"]["path"]
+        if node is None or path not in ("translation", "rotation", "scale"):
+            continue
+        smp = an["samplers"][ch["sampler"]]
+        inp = G.accessor(smp["input"])[:, 0]
+        out = G.accessor(smp["output"])
+        interp = smp.get("interpolation", "LINEAR")
+        if interp == "CUBICSPLINE":
+            out = out.reshape(len(inp), 3, -1)[:, 1, :]
+        if interp == "STEP":
+            k = np.clip(np.searchsorted(inp, times + 1e-6, "right") - 1, 0, len(inp) - 1)
+            val = out[k]
+        else:
+            val = np.stack([np.interp(times, inp, out[:, c]) for c in range(out.shape[1])], 1)
+        trs[node][path] = val
+    parent = {}
+    for i, n in enumerate(nodes):
+        for c in n.get("children", []):
+            parent[c] = i
+    W = [None] * N
+
+    def w(i):
+        if W[i] is None:
+            n = nodes[i]
+            if "matrix" in n:
+                L = np.tile(np.array(n["matrix"], np.float64).reshape(4, 4).T, (T, 1, 1))
+            else:
+                L = np.zeros((T, 4, 4))
+                L[:, :3, :3] = np_quat_to_mat(trs[i]["rotation"]) * trs[i]["scale"][:, None, :]
+                L[:, :3, 3] = trs[i]["translation"]
+                L[:, 3, 3] = 1.0
+            W[i] = (w(parent[i]) @ L) if i in parent else L
+        return W[i]
+    for i in range(N):
+        w(i)
+    return np.array(W)
+
+
 def quat_wxyz(q_xyzw):
     return Quaternion((q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]))
 
@@ -331,6 +453,92 @@ def gl_sample(times, vals, t, interp, path):
 
 # FBX / glTF (Y up, front +Z) -> Blender (Z up, front -Y): (x, y, z) -> (x, -z, y)
 YUP_TO_BL = Matrix(((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
+YUP_TO_BL_NP = np.array(YUP_TO_BL)
+OFF_AXIS = 0.05       # m: third comparison point per bone, M @ (OFF_AXIS, 0, 0); heads and tails lie on the bone axis
+                      # and cannot see a roll about it (a 1 mm tolerance here = 1.1 deg of roll)
+LIMB_RE = re.compile(r"(Leg|^FF)")      # leg chain + hoof bones: the tight twist gate (candy-wrapped forearms/shins)
+# clips entered from and/or left to the standing Idle (Unity/Calf/Editor/CalfSetup.cs one-shots and chains)
+STANDING_ENDS = {"TurnLeft90": "both", "TurnRight90": "both", "Leap": "both", "HeadShake": "both", "Call": "both",
+                 "Idle_LookAround": "both", "Graze_Start": "start", "Graze_End": "end", "LieDown": "start",
+                 "GetUp": "end", "Death": "start"}
+
+
+# ============================================================================================ numpy transform helpers
+def np_euler_xyz(deg):
+    """(T, 3) Euler XYZ degrees (FBX / Blender 'XYZ': X applied first) -> (T, 3, 3) = Rz @ Ry @ Rx"""
+    r = np.radians(np.asarray(deg, np.float64))
+    cx, cy, cz = np.cos(r[:, 0]), np.cos(r[:, 1]), np.cos(r[:, 2])
+    sx, sy, sz = np.sin(r[:, 0]), np.sin(r[:, 1]), np.sin(r[:, 2])
+    R = np.empty((len(r), 3, 3))
+    R[:, 0, 0] = cy * cz; R[:, 0, 1] = sx * sy * cz - cx * sz; R[:, 0, 2] = cx * sy * cz + sx * sz
+    R[:, 1, 0] = cy * sz; R[:, 1, 1] = sx * sy * sz + cx * cz; R[:, 1, 2] = cx * sy * sz - sx * cz
+    R[:, 2, 0] = -sy;     R[:, 2, 1] = sx * cy;                R[:, 2, 2] = cx * cy
+    return R
+
+
+def np_quat_to_mat(q):
+    """(T, 4) quaternions (x, y, z, w; glTF order, normalised here) -> (T, 3, 3)"""
+    q = np.asarray(q, np.float64)
+    q = q / np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-12)
+    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    R = np.empty((len(q), 3, 3))
+    R[:, 0, 0] = 1 - 2 * (y * y + z * z); R[:, 0, 1] = 2 * (x * y - z * w); R[:, 0, 2] = 2 * (x * z + y * w)
+    R[:, 1, 0] = 2 * (x * y + z * w); R[:, 1, 1] = 1 - 2 * (x * x + z * z); R[:, 1, 2] = 2 * (y * z - x * w)
+    R[:, 2, 0] = 2 * (x * z - y * w); R[:, 2, 1] = 2 * (y * z + x * w); R[:, 2, 2] = 1 - 2 * (x * x + y * y)
+    return R
+
+
+def np_mat_to_quat(R):
+    """(..., 3, 3) rotation matrices -> (..., 4) quaternions (w, x, y, z), w >= 0 (Shepperd, robust at 180 deg)"""
+    R = np.asarray(R, np.float64)
+    m00, m11, m22 = R[..., 0, 0], R[..., 1, 1], R[..., 2, 2]
+    tr = m00 + m11 + m22
+    cands = np.stack([tr, m00, m11, m22], -1)
+    k = np.argmax(cands, -1)
+    q = np.zeros(R.shape[:-2] + (4,))
+    s = np.sqrt(np.maximum(1.0 + 2.0 * np.take_along_axis(cands, k[..., None], -1)[..., 0] - tr, 1e-18)) * 2.0
+    # s = 4 * |largest component|
+    w0 = k == 0
+    q[w0] = np.stack([0.25 * s[w0], (R[w0][:, 2, 1] - R[w0][:, 1, 2]) / s[w0], (R[w0][:, 0, 2] - R[w0][:, 2, 0]) / s[w0],
+                      (R[w0][:, 1, 0] - R[w0][:, 0, 1]) / s[w0]], -1)
+    w1 = k == 1
+    q[w1] = np.stack([(R[w1][:, 2, 1] - R[w1][:, 1, 2]) / s[w1], 0.25 * s[w1], (R[w1][:, 0, 1] + R[w1][:, 1, 0]) / s[w1],
+                      (R[w1][:, 0, 2] + R[w1][:, 2, 0]) / s[w1]], -1)
+    w2 = k == 2
+    q[w2] = np.stack([(R[w2][:, 0, 2] - R[w2][:, 2, 0]) / s[w2], (R[w2][:, 0, 1] + R[w2][:, 1, 0]) / s[w2], 0.25 * s[w2],
+                      (R[w2][:, 1, 2] + R[w2][:, 2, 1]) / s[w2]], -1)
+    w3 = k == 3
+    q[w3] = np.stack([(R[w3][:, 1, 0] - R[w3][:, 0, 1]) / s[w3], (R[w3][:, 0, 2] + R[w3][:, 2, 0]) / s[w3],
+                      (R[w3][:, 1, 2] + R[w3][:, 2, 1]) / s[w3], 0.25 * s[w3]], -1)
+    q *= np.where(q[..., :1] < 0, -1.0, 1.0)
+    return q
+
+
+def np_twist_y(R):
+    """signed twist (deg) about the local Y axis of rotations R (..., 3, 3) (swing-twist decomposition)"""
+    q = np_mat_to_quat(R)
+    return (np.degrees(2.0 * np.arctan2(q[..., 2], q[..., 0])) + 180.0) % 360.0 - 180.0
+
+
+def np_rot_angle(R):
+    q = np_mat_to_quat(R)
+    return np.degrees(2.0 * np.arccos(np.clip(q[..., 0], -1.0, 1.0)))
+
+
+def np_normalise3(M):
+    """rotation part of (..., 4, 4) matrices with the column scale removed"""
+    R = M[..., :3, :3]
+    return R / np.maximum(np.linalg.norm(R, axis=-2, keepdims=True), 1e-12)
+
+
+def bone_points(M, length):
+    """world matrix (4x4, numpy) -> (head, tail point M @ (0, L, 0), off-axis point M @ (OFF_AXIS, 0, 0))"""
+    h = M[:3, 3]
+    return (h.copy(), M[:3, 1] * length + h, M[:3, 0] * OFF_AXIS + h)
+
+
+def point_err(sp, dp):
+    return max(float(np.linalg.norm(np.asarray(s) - np.asarray(d))) for s, d in zip(sp, dp))
 
 
 # ============================================================================================ Blender helpers
@@ -373,22 +581,55 @@ def use_action(arm, act):
     reset_pose(arm)
 
 
-def bone_samples(arm, names, lengths, frames):
-    """{frame: {bone: (head, tail_point)}} in world space; tail_point = M @ (0, L_src, 0)"""
+def bone_mats(arm, names, frames):
+    """(F, B, 4, 4) world matrices of the pose bones `names` (NaN for a missing bone) on `frames`"""
     sc = bpy.context.scene
-    out = {}
-    for f in frames:
+    pbs = [arm.pose.bones.get(n) for n in names]
+    out = np.full((len(frames), len(names), 4, 4), np.nan)
+    for i, f in enumerate(frames):
         sc.frame_set(int(f))
         mw = arm.matrix_world
-        d = {}
-        for n in names:
-            pb = arm.pose.bones.get(n)
-            if pb is None:
-                continue
-            M = mw @ pb.matrix
-            d[n] = (np.array(M.translation), np.array(M @ Vector((0.0, lengths[n], 0.0))))
-        out[f] = d
+        for j, pb in enumerate(pbs):
+            if pb is not None:
+                out[i, j] = np.array(mw @ pb.matrix)
     return out
+
+
+def bone_samples(arm, names, lengths, frames, mats=None):
+    """{frame: {bone: (head, tail point, off-axis point)}} in world space: tail point = M @ (0, L_src, 0), off-axis
+    point = M @ (OFF_AXIS, 0, 0) (sees a roll about the bone axis)"""
+    M = bone_mats(arm, names, frames) if mats is None else mats
+    out = {}
+    for i, f in enumerate(frames):
+        out[f] = {n: bone_points(M[i, j], lengths[n]) for j, n in enumerate(names) if not np.isnan(M[i, j, 0, 0])}
+    return out
+
+
+def twist_report(M, names, parent, rest):
+    """per-frame twist continuity of an action: M (F, B, 4, 4) world matrices on consecutive frames.
+    pop[f, b]   = twist (deg) about bone b's own Y axis between frames f and f+1 (a flip shows as ~180)
+    local[f, b] = twist of bone b relative to its rest attachment on its parent (candy-wrap territory near 180)
+    rot[f, b]   = total local rotation angle (deg) relative to the rest attachment"""
+    R = np_normalise3(M)
+    pop = np.abs(np_twist_y(np.einsum("fbji,fbjk->fbik", R[:-1], R[1:]))) if len(M) > 1 else np.zeros((0, len(names)))
+    idx = {n: j for j, n in enumerate(names)}
+    local = np.zeros((len(M), len(names)))
+    rot = np.zeros((len(M), len(names)))
+    ends = np.tile(np.eye(3), (2, len(names), 1, 1))      # local rotations on the first and last frame
+    for j, n in enumerate(names):
+        p = parent.get(n)
+        if p in idx:
+            att = rest[p]
+            base = np.einsum("fij,jk->fik", M[:, idx[p]], np.linalg.inv(att) @ rest[n])     # rest attachment, posed
+            L = np.einsum("fji,fjk->fik", np_normalise3(base), R[:, j])
+        else:           # a root joint (Root: the root-motion node, yaws in the turns): its twist is not a skin issue
+            L = np.einsum("ji,fjk->fik", np_normalise3(rest[n][None])[0], R[:, j])
+            rot[:, j] = np_rot_angle(L)
+            continue
+        local[:, j] = np.abs(np_twist_y(L))
+        rot[:, j] = np_rot_angle(L)
+        ends[0, j], ends[1, j] = L[0], L[-1]
+    return pop, local, rot, ends
 
 
 def mesh_world_coords(obj):
@@ -417,9 +658,10 @@ def weight_stats_vgroups(obj, bone_names):
     return np.array(cnt), np.array(sums)
 
 
-def sample_frames(lo, hi, n=12):
+def sample_frames(lo, hi, n=0):
+    """n <= 0: every frame; else about n evenly spaced frames plus the last"""
     lo, hi = int(round(lo)), int(round(hi))
-    step = max(1, (hi - lo) // n)
+    step = max(1, (hi - lo) // n) if n and n > 0 else 1
     fr = list(range(lo, hi + 1, step))
     if fr[-1] != hi:
         fr.append(hi)
@@ -427,14 +669,14 @@ def sample_frames(lo, hi, n=12):
 
 
 def compare(src_samp, dst_samp, frame_map, bones, key_bones):
-    """max errors (heads / tail points) over all bones and over key bones"""
+    """max errors (heads / tail points / off-axis points) over all bones and over key bones"""
     worst_all, worst_key, where = 0.0, 0.0, None
     for f, fd in frame_map.items():
         s, d = src_samp[f], dst_samp[fd]
         for n in bones:
             if n not in s or n not in d:
                 continue
-            e = max(np.linalg.norm(s[n][0] - d[n][0]), np.linalg.norm(s[n][1] - d[n][1]))
+            e = point_err(s[n], d[n])
             if e > worst_all:
                 worst_all, where = e, (n, f)
             if n in key_bones:
@@ -518,10 +760,16 @@ def load_source(a, manifest):
     use_action(arm, None)
     sc.frame_set(0)
     S["rest"] = bone_samples(arm, S["bones"], S["lengths"], [0])[0]
-    S["samples"], S["mesh"] = {}, {}
+    S["rest_mats"] = {b.name: np.array(arm.matrix_world @ b.matrix_local) for b in arm.data.bones}
+    S["samples"], S["mesh"], S["twist"] = {}, {}, {}
     for name, (lo, hi) in S["actions"].items():
         use_action(arm, bpy.data.actions[name])
-        S["samples"][name] = bone_samples(arm, S["bones"], S["lengths"], sample_frames(lo, hi, a.samples))
+        fr = sample_frames(lo, hi, a.samples)
+        M = bone_mats(arm, S["bones"], fr)
+        S["samples"][name] = bone_samples(arm, S["bones"], S["lengths"], fr, mats=M)
+        allf = list(range(int(round(lo)), int(round(hi)) + 1))
+        Mt = M if fr == allf else bone_mats(arm, S["bones"], allf)
+        S["twist"][name] = (allf, twist_report(Mt, S["bones"], S["parent"], S["rest_mats"]))
     lod0 = lods[0]
     lod0.hide_viewport = False
     use_action(arm, None)
@@ -555,6 +803,63 @@ def load_source(a, manifest):
                 S["textures"][m.name] = sorted({os.path.basename(n.image.filepath or n.image.name)
                                                 for n in m.node_tree.nodes if n.type == "TEX_IMAGE" and n.image})
     return S
+
+
+def check_twist(a, S):
+    """Twist continuity of every clip (source = the exported takes, which the motion checks compare with heads, tails
+    and off-axis points).  A bone that rolls ~180 deg about its own axis between two frames keeps its joint positions
+    but candy-wraps its skin (the IK roll flip of an ill-conditioned pole).
+      FAIL  a leg/hoof bone (LIMB_RE) twists > --twist-limb-deg between consecutive frames, or any bone
+            > --twist-fail-deg, or any bone's twist relative to its parent exceeds --twist-local-deg
+      WARN  any bone twists > --twist-warn-deg between consecutive frames"""
+    sec = "anim"
+    names = S["bones"]
+    limb = np.array([bool(LIMB_RE.search(n)) for n in names])
+    S["rot_max"] = {}
+    for clip, (frames, (pop, local, rot, _)) in S["twist"].items():
+        for j, n in enumerate(names):
+            i = int(rot[:, j].argmax())
+            if rot[i, j] > S["rot_max"].get(n, (-1.0,))[0]:
+                S["rot_max"][n] = (float(rot[i, j]), clip, frames[i])
+        top = []
+        if pop.size:
+            order = np.argsort(-pop.max(0))
+            for j in order[:3]:
+                i = int(pop[:, j].argmax())
+                top.append("%s %.1f f%d->%d" % (names[j], pop[i, j], frames[i], frames[i + 1]))
+        limb_pop = float(pop[:, limb].max()) if pop.size and limb.any() else 0.0
+        any_pop = float(pop.max()) if pop.size else 0.0
+        jl = int(local.max(0).argmax())
+        il = int(local[:, jl].argmax())
+        loc = float(local[il, jl])
+        fail = limb_pop > a.twist_limb_deg or any_pop > a.twist_fail_deg or loc > a.twist_local_deg
+        status = False if fail else ("WARN" if any_pop > a.twist_warn_deg else True)
+        check(sec, "%s twist continuity" % clip, status,
+              "max per-frame twist about the bone's own axis: legs/hooves %.1f deg (limit %g), all bones %.1f deg "
+              "(warn %g, fail %g); top %s; max twist vs parent %.1f deg (%s f%d, limit %g)" %
+              (limb_pop, a.twist_limb_deg, any_pop, a.twist_warn_deg, a.twist_fail_deg, "; ".join(top) or "-",
+               loc, names[jl], frames[il], a.twist_local_deg))
+    # one-shot boundaries: clips that CalfSetup.cs enters from / leaves to the standing Idle with a short cross-fade
+    # should start / end on the standing pose (local joint rotations vs Idle f0; Root excluded, it carries the motion)
+    ref = S["twist"].get(a.boundary_ref)
+    if ref is None:
+        return
+    Lref = ref[1][3][0]
+    for clip, ends_want in STANDING_ENDS.items():
+        if clip not in S["twist"]:
+            continue
+        E = S["twist"][clip][1][3]
+        parts, worst = [], 0.0
+        for k, tag in ((0, "start"), (1, "end")):
+            if ends_want not in (tag, "both"):
+                continue
+            ang = np_rot_angle(np.einsum("bji,bjk->bik", E[k], Lref))
+            j = int(ang.argmax())
+            worst = max(worst, float(ang[j]))
+            parts.append("%s %.1f deg (%s)" % (tag, ang[j], names[j]))
+        check(sec, "%s boundary vs %s f0" % (clip, a.boundary_ref), "WARN" if worst > a.boundary_warn_deg else True,
+              "%s: max local joint rotation difference %s (warn > %g: the Animator cross-fades this into / out of %s)" %
+              ("start and end" if ends_want == "both" else ends_want, ", ".join(parts), a.boundary_warn_deg, a.boundary_ref))
 
 
 # ============================================================================================ FBX raw checks
@@ -658,10 +963,15 @@ def check_fbx_raw(a, S, expect_tex):
         cnt = np.zeros(nv, int)
         sums = np.zeros(nv)
         clusters = 0
+        cl_data, empty = [], []
         for sk in skins:
             for cl in F.linked(sk, "Deformer"):
-                idx = F.objs[cl].find("Indexes")
+                node = F.objs[cl]
+                bone = [pa for pa, typ, prop in F.children_of.get(cl, []) if pa in F.models]
+                idx = node.find("Indexes")
                 if idx is None:
+                    if bone:
+                        empty.append(F.name(bone[0]))
                     continue
                 clusters += 1
                 ii = idx.props[0]
@@ -669,10 +979,47 @@ def check_fbx_raw(a, S, expect_tex):
                 nz = ww > 0
                 np.add.at(cnt, ii[nz], 1)
                 np.add.at(sums, ii[nz], ww[nz])
+                if bone and nz.any():
+                    # FBX SDK semantics: bind = TransformLink^-1 @ (mesh global at bind); the mesh global is taken from
+                    # the mesh node (Blender stores the cluster "Transform" already in bone space, TL^-1 @ mesh, in the
+                    # file, see export_fbx_bin.py; the SDK reports it as the mesh global)
+                    TL = np.array(node.find("TransformLink").props[0], np.float64).reshape(4, 4).T  # column-major
+                    Wm = np.array(F.local_matrix(model_of[lname]))
+                    pu = F.model_parent.get(model_of[lname], 0)
+                    while pu in F.models:
+                        Wm = np.array(F.local_matrix(pu)) @ Wm
+                        pu = F.model_parent.get(pu, 0)
+                    cl_data.append((bone[0], ii[nz], ww[nz].astype(np.float64), np.linalg.inv(TL) @ Wm))
+                elif bone:
+                    empty.append(F.name(bone[0]))
         check(sec, "%s skin influences" % lname, cnt.max() <= 4 and cnt.min() >= 1,
               "max %d, min %d per vertex, %d non-empty clusters, histogram %s" % (cnt.max(), cnt.min(), clusters, np.bincount(cnt).tolist()))
         dev = np.abs(sums - 1).max()
         check(sec, "%s skin weight sums" % lname, dev <= 1e-3, "max |sum-1| = %.2e" % dev)
+        # deforming joints without any weight: Root is expected (root-motion node); an animated chain joint without
+        # weights (e.g. Tail5 inherited from cow.glb) only moves its children, its own segment cannot follow it
+        rot = S.get("rot_max", {})
+        odd = sorted(n for n in set(empty) | {n for n in S["bones"] if n in limbs and n not in
+                                               {F.name(c[0]) for c in cl_data} and n not in S["dropped"]}
+                     if n != "Root")
+        anim = [n for n in odd if rot.get(n, (0.0,))[0] > 1.0]
+        check(sec, "%s unweighted joints" % lname, "WARN" if anim else True,
+              "joints without weights (besides Root): %s%s" % (odd or "none", "; animated: " + ", ".join(
+                  "%s up to %.1f deg (%s f%d)" % (n, rot[n][0], rot[n][1], rot[n][2]) for n in anim) if anim else ""))
+        # FBX skin (what Unity computes): v = sum_k w_k * W_bone(t) @ TransformLink^-1 @ Transform @ v_mesh
+        if cl_data:
+            idx4 = np.zeros((nv, 4), np.int64)
+            w4 = np.zeros((nv, 4))
+            slot = np.zeros(nv, np.int64)
+            for k, (_, ii, ww, _) in enumerate(cl_data):
+                keep = slot[ii] < 4
+                idx4[ii[keep], slot[ii[keep]]] = k
+                w4[ii[keep], slot[ii[keep]]] = ww[keep]
+                slot[ii[keep]] += 1
+            F.skin = getattr(F, "skin", {})
+            F.skin[lname] = {"verts": g.find("Vertices").props[0].reshape(-1, 3).astype(np.float64),
+                             "bones": [c[0] for c in cl_data], "bind": np.array([c[3] for c in cl_data]),
+                             "idx": idx4, "w": w4}
 
     # takes
     raw = {F.name(u): u for u in F.stacks()}
@@ -699,25 +1046,15 @@ def check_fbx_raw(a, S, expect_tex):
         check(sec, "take %s range" % n, ok, "frames %.3f-%.3f (%.3f s) vs source %g-%g" %
               (t0 / FBX_KTIME * fps, t1 / FBX_KTIME * fps, (t1 - t0) / FBX_KTIME, lo, hi))
 
-    # take evaluation with FBX maths
-    order = []
-    seen = set()
-
-    def visit(u):
-        if u in seen:
-            return
-        pu = F.model_parent.get(u, 0)
-        if pu in F.models:
-            visit(pu)
-        seen.add(u)
-        order.append(u)
-    for u in F.models:
-        visit(u)
+    # take evaluation with FBX maths, every sampled frame (default: every frame), 3 points per bone (head, tail,
+    # off-axis: a roll about the bone axis is caught too)
     conv = YUP_TO_BL @ Matrix.Diagonal(Vector((unit, unit, unit, 1.0)))
+    conv_np = np.array(conv)
+    F.conv = conv_np
 
     def world_mats(curves, t):
         W = {}
-        for u in order:
+        for u in F.model_order():
             over = None
             if curves is not None and u in curves:
                 over = {}
@@ -734,40 +1071,53 @@ def check_fbx_raw(a, S, expect_tex):
     err_rest = 0.0
     for n in S["bones"]:
         if n in limbs:
-            M = conv @ W[limbs[n]]
-            err_rest = max(err_rest, (Vector(S["rest"][n][0]) - M.translation).length)
-    check(sec, "rest skeleton vs source", err_rest <= a.tol_mm / 1000, "max joint position error %s" % mm(err_rest))
-    worst = {}
+            M = np.array(conv @ W[limbs[n]])
+            err_rest = max(err_rest, point_err(S["rest"][n], bone_points(M, lengths[n])))
+    check(sec, "rest skeleton vs source", err_rest <= a.tol_mm / 1000,
+          "max error %s (joint heads, bone-axis and off-axis points)" % mm(err_rest))
+    F.take_times = {}
     for n, (lo, hi) in want.items():
         if n not in stacks:
             continue
         curves = F.stack_curves(stacks[n])
         keyed = [F.name(u) for u in curves if u in limbs.values()]
+        frames = sorted(S["samples"][n])
+        times = sp[n][0] + np.round((np.array(frames, np.float64) - lo) / fps * FBX_KTIME)
+        F.take_times[n] = (stacks[n], sp[n][0], lo)
+        Wt = F.world_all(curves, times)
         e_all = e_key = 0.0
         where = None
-        for f, sd in S["samples"][n].items():
-            t = sp[n][0] + int(round((f - lo) / fps * FBX_KTIME))
-            W = world_mats(curves, t)
+        for i, f in enumerate(frames):
+            sd = S["samples"][n][f]
             for b in S["bones"]:
                 if b not in limbs or b not in sd:
                     continue
-                M = conv @ W[limbs[b]]
-                e = max((Vector(sd[b][0]) - M.translation).length, (Vector(sd[b][1]) - M @ Vector((0, lengths[b], 0))).length)
+                e = point_err(sd[b], bone_points(conv_np @ Wt[limbs[b]][i], lengths[b]))
                 if e > e_all:
                     e_all, where = e, (b, f)
                 if b in S["key_bones"]:
                     e_key = max(e_key, e)
-        worst[n] = e_all
-        rm = ""
-        if "Root" in limbs:
-            w0 = world_mats(curves, sp[n][0])[limbs["Root"]]
-            w1 = world_mats(curves, sp[n][1])[limbs["Root"]]
-            d = (w1.translation - w0.translation) * unit
-            yaw = math.degrees((w0.to_3x3().inverted() @ w1.to_3x3()).to_euler("YXZ").y)
-            rm = "; Root motion (Unity) dx %+.3f dz %+.3f m, yaw %+.1f deg" % (-d.x, d.z, -yaw)
         check(sec, "take %s motion (FBX maths)" % n, e_all <= a.tol_mm / 1000,
-              "%d bones keyed; over %d frames: key bones max %s, all bones max %s%s%s" %
-              (len(keyed), len(S["samples"][n]), mm(e_key), mm(e_all), (" at %s f%d" % where) if where and e_all > a.tol_mm / 1000 else "", rm))
+              "%d bones keyed; over %d frames: key bones max %s, all bones max %s (heads, tails, off-axis points)%s" %
+              (len(keyed), len(frames), mm(e_key), mm(e_all), (" at %s f%d" % where) if where and e_all > a.tol_mm / 1000 else ""))
+        if "Root" in limbs:
+            # root motion as Unity reads it, every sampled frame: FBX (x, y, z) -> Unity (-x, y, z); rotations mirrored
+            Rw = Wt[limbs["Root"]]
+            pos = Rw[:, :3, 3] * unit
+            pos = (pos - pos[0]) * np.array([-1.0, 1.0, 1.0])
+            Mx = np.diag([-1.0, 1.0, 1.0])
+            R0 = np_normalise3(Rw[:1])[0]
+            Rrel = Mx @ np.einsum("fij,kj->fik", np_normalise3(Rw), R0) @ Mx       # world-frame delta vs frame 0
+            fwd, up = Rrel[:, :, 2], Rrel[:, :, 1]
+            yaw = np.degrees(np.unwrap(np.arctan2(fwd[:, 0], fwd[:, 2])))
+            tilt = np.degrees(np.arccos(np.clip(up[:, 1], -1.0, 1.0)))
+            flat = np.abs(pos[:, 1]).max() <= 0.001 and tilt.max() <= 0.05
+            check(sec, "take %s root motion" % n, True if flat else "WARN",
+                  "Unity space over %d frames: x %+.3f..%+.3f m, z %+.3f..%+.3f m (end %+.3f, %+.3f), height |y| max %.1f mm, "
+                  "yaw %+.1f..%+.1f deg (end %+.1f), pitch/roll max %.2f deg%s" %
+                  (len(frames), pos[:, 0].min(), pos[:, 0].max(), pos[:, 2].min(), pos[:, 2].max(), pos[-1, 0], pos[-1, 2],
+                   np.abs(pos[:, 1]).max() * 1000, yaw.min(), yaw.max(), yaw[-1], tilt.max(),
+                   "" if flat else " (the Root was designed to stay on the ground plane and upright)"))
     # facing in Unity space: FBX (x, y, z) -> Unity (-x, y, z) * unit
     W = world_mats(None, 0)
 
@@ -799,6 +1149,147 @@ def check_fbx_raw(a, S, expect_tex):
     else:
         check(sec, "texture references", "INFO", "%d (no textures expected: %s)" % (len(texs), [t[0] for t in texs]))
     return F
+
+
+# ============================================================================================ skin, every frame
+def skin_np(Mb, idx, w, vh):
+    """linear blend skinning: Mb (B, 4, 4) skinning matrices, idx/w (V, 4) influences, vh (V, 4) homogeneous"""
+    out = np.zeros((len(vh), 3))
+    for k in range(idx.shape[1]):
+        if not w[:, k].any():
+            continue
+        out += w[:, k, None] * np.einsum("vij,vj->vi", Mb[idx[:, k], :3, :], vh)
+    return out
+
+
+def check_skin_frames(a, S, F, G):
+    """Skinned-vertex deviation of the shipped skins from the Blender source (all influences, what every clip QA and
+    review render shows) on EVERY frame of every clip, with the engines' own maths:
+      FBX  v = sum_k w_k * W_bone(t) @ TransformLink^-1 @ Transform @ v   (clusters + take curves, as Unity's FBX SDK)
+      GLB  v = sum_k w_k * W_joint(t) @ IBM @ v                            (glTF 2.0 skinning; LOD0 only)
+    The deviation is the effect of the 4-influence limit (plus export precision)."""
+    sec = "skin"
+    fbx_lods = [n for n in S["lods"] if F is not None and n in getattr(F, "skin", {})]
+    use_glb = G is not None and G.mesh_node is not None and G.json.get("skins")
+    if not fbx_lods and not use_glb:
+        return
+    t_start = time.time()
+    bpy.ops.wm.open_mainfile(filepath=a.src)
+    sc = bpy.context.scene
+    arm = bpy.data.objects[S["arm"]]
+    objs = {n: bpy.data.objects[n] for n in S["lods"]}
+    for o in bpy.data.objects:
+        if o.type == "MESH":
+            o.hide_viewport = o.name not in objs
+    use_action(arm, None)
+    sc.frame_set(0)
+    rest = {n: mesh_world_coords(o) for n, o in objs.items()}
+    conv = getattr(F, "conv", np.array(YUP_TO_BL)) if F is not None else None
+    prep = {}
+    for n in fbx_lods:
+        sk = F.skin[n]
+        vh = np.c_[sk["verts"], np.ones(len(sk["verts"]))]
+        if len(vh) != len(rest[n]):
+            check(sec, "%s FBX vertices" % n, False, "%d FBX vertices vs %d source vertices" % (len(vh), len(rest[n])))
+            continue
+        W0 = F.world_all(None, [0.0])
+        Mb = np.array([W0[u][0] for u in sk["bones"]]) @ sk["bind"]
+        Xb = skin_np(Mb, sk["idx"], sk["w"], vh) @ conv[:3, :3].T + conv[:3, 3]
+        e_bind = float(np.linalg.norm(Xb - rest[n], axis=1).max())
+        prep[n] = (vh, e_bind)
+    gprep = None
+    if use_glb:
+        J = G.json
+        skin = J["skins"][0]
+        joints = skin["joints"]
+        ibm = G.accessor(skin["inverseBindMatrices"]).reshape(-1, 4, 4).transpose(0, 2, 1)
+        P, Jn, Wg = [], [], []
+        for prim in J["meshes"][J["nodes"][G.mesh_node]["mesh"]]["primitives"]:
+            at = prim["attributes"]
+            if not {"POSITION", "JOINTS_0", "WEIGHTS_0"} <= set(at):
+                continue
+            P.append(G.accessor(at["POSITION"]))
+            Jn.append(G.accessor(at["JOINTS_0"]).astype(np.int64))
+            Wg.append(G.accessor(at["WEIGHTS_0"]))
+        if P:
+            from mathutils.kdtree import KDTree
+            vh_g = np.c_[np.concatenate(P), np.ones(sum(len(p) for p in P))]
+            jn, wg = np.concatenate(Jn), np.concatenate(Wg)
+            W0 = glb_world_all(G, None, [0.0])
+            Xr = skin_np(W0[joints, 0] @ ibm, jn, wg, vh_g) @ YUP_TO_BL_NP[:3, :3].T
+            src0 = rest[S["lod0"]]
+            kd = KDTree(len(src0))
+            for i, co in enumerate(src0):
+                kd.insert(co, i)
+            kd.balance()
+            vmap = np.empty(len(Xr), np.int64)
+            dmap = np.empty(len(Xr))
+            for i, co in enumerate(Xr):
+                _, vmap[i], dmap[i] = kd.find(co)
+            gprep = (vh_g, jn, wg, ibm, joints, vmap, float(dmap.max()))
+    fps = S["fps"]
+    res = {n: [] for n in prep}
+    gres = []
+    nfr = 0
+    for clip, (lo, hi) in S["actions"].items():
+        frames = list(range(int(round(lo)), int(round(hi)) + 1))
+        fr = np.array(frames, np.float64)
+        use_action(arm, bpy.data.actions[clip])
+        Mf = {}
+        if prep and clip in getattr(F, "take_times", {}):
+            stack, t0, lo_ = F.take_times[clip]
+            Wt = F.world_all(F.stack_curves(stack), t0 + np.round((fr - lo_) / F.fps * FBX_KTIME))
+            for n in prep:
+                sk = F.skin[n]
+                Mf[n] = np.stack([Wt[u] for u in sk["bones"]], 1) @ sk["bind"][None]       # (T, B, 4, 4)
+        Mg = None
+        if gprep is not None and clip in G.anims:
+            vh_g, jn, wg, ibm, joints, vmap, _ = gprep
+            Mg = glb_world_all(G, G.anims[clip], (fr - lo) / fps)[joints].transpose(1, 0, 2, 3) @ ibm[None]
+        for i, f in enumerate(frames):
+            sc.frame_set(f)
+            nfr += 1
+            src = {}
+            for n in Mf:
+                src[n] = mesh_world_coords(objs[n])
+                sk = F.skin[n]
+                X = skin_np(Mf[n][i], sk["idx"], sk["w"], prep[n][0]) @ conv[:3, :3].T + conv[:3, 3]
+                d = np.linalg.norm(X - src[n], axis=1)
+                v = int(d.argmax())
+                res[n].append((float(d[v]), clip, f, v, float(np.percentile(d, 99.9)), float(d.mean())))
+            if Mg is not None:
+                s0 = src.get(S["lod0"])
+                if s0 is None:
+                    s0 = mesh_world_coords(objs[S["lod0"]])
+                X = skin_np(Mg[i], jn, wg, vh_g) @ YUP_TO_BL_NP[:3, :3].T
+                d = np.linalg.norm(X - s0[vmap], axis=1)
+                v = int(d.argmax())
+                gres.append((float(d[v]), clip, f, int(vmap[v]), float(np.percentile(d, 99.9)), float(d.mean())))
+    log("skin deviation over %d frames in %.1f s" % (nfr, time.time() - t_start))
+
+    def report(name, rows, extra, rest_err, rest_coords):
+        if not rows:
+            return
+        w = max(rows)
+        per = {}
+        for r in rows:
+            per[r[1]] = max(per.get(r[1], 0.0), r[0])
+        top = sorted(per.items(), key=lambda kv: -kv[1])
+        p = rest_coords[w[3]]
+        status = True if w[0] <= a.skin_warn_mm / 1000 else ("WARN" if w[0] <= a.skin_fail_mm / 1000 else False)
+        if rest_err > a.tol_mm / 1000:
+            status = False
+        check(sec, name, status,
+              "every frame (%d): worst %s f%d max %s at v%d (rest %.3f, %.3f, %.3f), 99.9%% %s, mean %s; per-clip max %s; "
+              "rest pose %s%s (pass <= %g mm, warn <= %g mm)" %
+              (len(rows), w[1], w[2], mm(w[0]), w[3], p[0], p[1], p[2], mm(w[4]), mm(w[5]),
+               ", ".join("%s %.1f" % (c, e * 1000) for c, e in top[:8]), mm(rest_err), extra, a.skin_warn_mm, a.skin_fail_mm))
+    for n in prep:
+        report("%s FBX skin vs source" % n, res[n], "", prep[n][1], rest[n])
+    if gprep is not None:
+        report("%s GLB skin vs source" % S["lod0"], gres, " (GLB vertex -> source vertex map max %s)" % mm(gprep[6]),
+               gprep[6], rest[S["lod0"]])
+    S["skin_worst"] = {n: max(r) if r else None for n, r in list(res.items()) + [("glb", gres)]}
 
 
 # ============================================================================================ FBX re-import
@@ -849,8 +1340,8 @@ def check_fbx_import(a, S, expect_tex):
     use_action(arm, None)
     sc.frame_set(0)
     rest = bone_samples(arm, S["bones"], S["lengths"], [0])[0]
-    e = max(max(np.linalg.norm(rest[n][0] - S["rest"][n][0]), np.linalg.norm(rest[n][1] - S["rest"][n][1])) for n in S["bones"] if n in rest)
-    check(sec, "rest skeleton vs source", e <= a.tol_mm / 1000, "max error %s (joint heads + bone-axis points)" % mm(e))
+    e = max(point_err(rest[n], S["rest"][n]) for n in S["bones"] if n in rest)
+    check(sec, "rest skeleton vs source", e <= a.tol_mm / 1000, "max error %s (joint heads, bone-axis and off-axis points)" % mm(e))
     head, tail = rest["Head"][0], rest["Tail7"][0] if "Tail7" in rest else rest[S["bones"][-1]][0]
     check(sec, "facing", head[1] < tail[1] and head[2] > 0.3,
           "Head y=%.3f < Tail7 y=%.3f (Blender -Y front = Unity +Z), Head z=%.3f" % (head[1], tail[1], head[2]))
@@ -865,7 +1356,7 @@ def check_fbx_import(a, S, expect_tex):
         d = bone_samples(arm, S["bones"], S["lengths"], sorted(set(fmap.values())))
         e_all, e_key, where = compare(S["samples"][n], d, fmap, S["bones"], S["key_bones"])
         check(sec, "%s motion" % n, rng_ok and e_all <= a.tol_mm / 1000,
-              "range %g-%g (source %g-%g); key bones %s max %s, all bones max %s over %d frames%s" %
+              "range %g-%g (source %g-%g); key bones %s max %s, all bones max %s over %d frames (heads, tails, off-axis points)%s" %
               (act.frame_range[0], act.frame_range[1], lo, hi, "/".join(S["key_bones"]), mm(e_key), mm(e_all), len(fmap),
                (" (worst %s f%d)" % where) if where and e_all > a.tol_mm / 1000 else ""))
     # rest dimensions + skinned deformation vs source
@@ -898,10 +1389,13 @@ def check_fbx_import(a, S, expect_tex):
                     devs.append((d.max(), d.mean(), float(np.percentile(d, 99.9)), n, f))
             if devs:
                 w = max(devs)
-                status = True if w[0] <= 0.01 else "WARN"
+                # the every-frame deviation (with Unity's own FBX skinning maths) is the [skin] check; this one is the
+                # Blender-importer cross-check on 3 frames per clip, so it only fails on a gross error
+                status = True if w[0] <= a.skin_warn_mm / 1000 else ("INFO" if w[0] <= a.skin_fail_mm / 1000 else False)
                 check(sec, "LOD0 skinned vertices vs source", status,
-                      "worst frame %s f%d: max %s, 99.9%% %s, mean %s (4-influence limit + export precision; %d frames)" %
-                      (w[3], w[4], mm(w[0]), mm(w[2]), mm(w[1]), len(devs)))
+                      "Blender FBX importer, first/mid/last frame of each clip (%d frames): worst %s f%d max %s, 99.9%% %s, "
+                      "mean %s (4-influence limit + export precision; every frame: see [skin])" %
+                      (len(devs), w[3], w[4], mm(w[0]), mm(w[2]), mm(w[1])))
         else:
             check(sec, "LOD0 vertex count", False, "%d vs source %d" % (len(co), len(S["rest_coords"])))
     # materials / images
@@ -931,7 +1425,7 @@ def check_glb_raw(a, S, expect_tex):
     skins = J.get("skins", [])
     if not skins:
         check(sec, "skin", False, "no skin")
-        return
+        return None
     joints = [names[j] for j in skins[0]["joints"]]
     check(sec, "joints == source bones", sorted(joints) == sorted(S["bones"]),
           "%d joints (expected %d)%s" % (len(joints), len(S["bones"]),
@@ -982,8 +1476,10 @@ def check_glb_raw(a, S, expect_tex):
         return W
     W = world()
     jidx = {names[j]: j for j in skins[0]["joints"]}
-    e_rest = max((Vector(S["rest"][n][0]) - (YUP_TO_BL @ W[j]).translation).length for n, j in jidx.items() if n in S["rest"])
-    check(sec, "rest skeleton vs source", e_rest <= a.tol_mm / 1000, "max joint error %s" % mm(e_rest))
+    e_rest = max(point_err(S["rest"][n], bone_points(YUP_TO_BL_NP @ np.array(W[j]), S["lengths"][n]))
+                 for n, j in jidx.items() if n in S["rest"])
+    check(sec, "rest skeleton vs source", e_rest <= a.tol_mm / 1000,
+          "max error %s (joint heads, bone-axis and off-axis points)" % mm(e_rest))
     if "inverseBindMatrices" in skins[0]:
         ibm = G.accessor(skins[0]["inverseBindMatrices"])
         mesh_w = W[mesh_nodes[0]] if mesh_nodes else Matrix.Identity(4)
@@ -1004,40 +1500,35 @@ def check_glb_raw(a, S, expect_tex):
     check(sec, "animations present", sorted(anims) == sorted(S["actions"]),
           "%s (source %s)" % (sorted(anims), sorted(S["actions"])))
     fps = S["fps"]
+    G.anims, G.jidx, G.mesh_node = anims, jidx, (mesh_nodes[0] if mesh_nodes else None)
     for n, (lo, hi) in S["actions"].items():
         if n not in anims:
             continue
         an = anims[n]
-        chans = []
         t0, t1 = 1e9, -1e9
         for ch in an["channels"]:
-            smp = an["samplers"][ch["sampler"]]
-            inp = G.accessor(smp["input"])
-            out = G.accessor(smp["output"])
+            inp = G.accessor(an["samplers"][ch["sampler"]]["input"])
             t0, t1 = min(t0, inp.min()), max(t1, inp.max())
-            chans.append((ch["target"].get("node"), ch["target"]["path"], inp, out, smp.get("interpolation", "LINEAR")))
+        frames = sorted(S["samples"][n])
+        Wt = glb_world_all(G, an, (np.array(frames, np.float64) - lo) / fps)
         e_all = e_key = 0.0
         where = None
-        for f, sd in S["samples"][n].items():
-            tt = (f - lo) / fps
-            over = {}
-            for node, path, inp, out, interp in chans:
-                if path in ("translation", "rotation", "scale"):
-                    over.setdefault(node, {})[path] = list(gl_sample(inp, out, tt, interp, path))
-            Wf = world(over)
+        for i, f in enumerate(frames):
+            sd = S["samples"][n][f]
             for b, j in jidx.items():
                 if b not in sd:
                     continue
-                M = YUP_TO_BL @ Wf[j]
-                e = max((Vector(sd[b][0]) - M.translation).length, (Vector(sd[b][1]) - M @ Vector((0, S["lengths"][b], 0))).length)
+                e = point_err(sd[b], bone_points(YUP_TO_BL_NP @ Wt[j, i], S["lengths"][b]))
                 if e > e_all:
                     e_all, where = e, (b, f)
                 if b in S["key_bones"]:
                     e_key = max(e_key, e)
         dur_ok = abs(t0) < 1e-6 and abs((t1 - t0) - (hi - lo) / fps) < 1e-4
         check(sec, "anim %s" % n, dur_ok and e_all <= a.tol_mm / 1000,
-              "t %.4f-%.4f s (source %.4f s), %d channels; key bones max %s, all bones max %s%s" %
-              (t0, t1, (hi - lo) / fps, len(chans), mm(e_key), mm(e_all), (" at %s f%d" % where) if e_all > a.tol_mm / 1000 else ""))
+              "t %.4f-%.4f s (source %.4f s), %d channels; over %d frames: key bones max %s, all bones max %s "
+              "(heads, tails, off-axis points)%s" %
+              (t0, t1, (hi - lo) / fps, len(an["channels"]), len(frames), mm(e_key), mm(e_all),
+               (" at %s f%d" % where) if e_all > a.tol_mm / 1000 else ""))
     mats = [m.get("name") for m in J.get("materials", [])]
     imgs = J.get("images", [])
     emb = [im for im in imgs if "bufferView" in im]
@@ -1051,6 +1542,34 @@ def check_glb_raw(a, S, expect_tex):
     ok = sorted(mats) == want_mats and (len(emb) == len(imgs)) and (bool(imgs) if expect_tex else True)
     check(sec, "materials / images", ok, "%s; %d images (%d embedded, %s)" %
           (", ".join(texinfo), len(imgs), len(emb), sorted({im.get("mimeType") for im in imgs})))
+    ds = [m.get("name") for m in J.get("materials", []) if m.get("doubleSided")]
+    check(sec, "materials single-sided", "WARN" if ds else True,
+          ("doubleSided=true on %s: glTF engines disable backface culling for the closed body" % ds) if ds else
+          "doubleSided false on every material (closed meshes, backface culling)")
+    sizes, vram, total = [], 0.0, 0
+    for im in imgs:
+        if "bufferView" not in im:
+            continue
+        bv = J["bufferViews"][im["bufferView"]]
+        raw = G.bin[bv.get("byteOffset", 0): bv.get("byteOffset", 0) + bv["byteLength"]]
+        total += bv["byteLength"]
+        wh = struct.unpack(">II", raw[16:24]) if raw[:8] == b"\x89PNG\r\n\x1a\n" else None
+        if wh is None and raw[:2] == b"\xff\xd8":           # JPEG: scan for the SOF marker
+            k = 2
+            while k < len(raw) - 9:
+                mk, ln = raw[k + 1], struct.unpack(">H", raw[k + 2:k + 4])[0]
+                if mk in (0xC0, 0xC1, 0xC2):
+                    wh = struct.unpack(">HH", raw[k + 5:k + 9])[::-1]
+                    break
+                k += 2 + ln
+        if wh:
+            vram += wh[0] * wh[1] * 4 * 4 / 3.0 / 1e6          # RGBA8 + mips: what a PNG/JPEG decodes to at runtime
+        sizes.append("%s %s %.1f MB" % (im.get("name"), "%dx%d" % tuple(wh) if wh else "?", bv["byteLength"] / 1e6))
+    if imgs:
+        check(sec, "texture memory", "WARN" if vram > a.glb_vram_warn_mb else True,
+              "%s; %.1f MB of %.1f MB file; decoded uncompressed (PNG/JPEG in glTFast) ~%.0f MB VRAM with mips (warn > %g)" %
+              ("; ".join(sizes), total / 1e6, G.size / 1e6, vram, a.glb_vram_warn_mb))
+    return G
 
 
 # ============================================================================================ GLB re-import
@@ -1084,8 +1603,8 @@ def check_glb_import(a, S):
     use_action(arm, None)
     sc.frame_set(0)
     rest = bone_samples(arm, S["bones"], S["lengths"], [0])[0]
-    e = max(max(np.linalg.norm(rest[n][0] - S["rest"][n][0]), np.linalg.norm(rest[n][1] - S["rest"][n][1])) for n in S["bones"] if n in rest)
-    check(sec, "rest skeleton vs source", e <= a.tol_mm / 1000, "max error %s" % mm(e))
+    e = max(point_err(rest[n], S["rest"][n]) for n in S["bones"] if n in rest)
+    check(sec, "rest skeleton vs source", e <= a.tol_mm / 1000, "max error %s (joint heads, bone-axis and off-axis points)" % mm(e))
     if "Head" in rest and "Tail7" in rest:
         check(sec, "facing", rest["Head"][0][1] < rest["Tail7"][0][1],
               "Head y=%.3f < Tail7 y=%.3f" % (rest["Head"][0][1], rest["Tail7"][0][1]))
@@ -1099,7 +1618,7 @@ def check_glb_import(a, S):
         e_all, e_key, where = compare(S["samples"][n], d, fmap, S["bones"], S["key_bones"])
         rng_ok = abs((act.frame_range[1] - act.frame_range[0]) - (hi - lo)) < 1e-3
         check(sec, "%s motion" % n, rng_ok and e_all <= a.tol_mm / 1000,
-              "range %g-%g; key bones max %s, all bones max %s%s" % (act.frame_range[0], act.frame_range[1], mm(e_key), mm(e_all),
+              "range %g-%g; key bones max %s, all bones max %s over %d frames (heads, tails, off-axis points)%s" % (act.frame_range[0], act.frame_range[1], mm(e_key), mm(e_all), len(fmap),
                                                                   (" (worst %s f%d)" % where) if where and e_all > a.tol_mm / 1000 else ""))
     m = meshes[0]
     m.hide_viewport = False
@@ -1181,24 +1700,45 @@ def run_gltf_validator(a):
 
 # ============================================================================================ main
 def render(a, S):
-    """contact sheets of the source, the FBX and the GLB (Blender imports) on the same pose, for a visual check"""
+    """contact sheets of the source, the FBX and the GLB (Blender imports) on the same pose, for a visual check; the
+    three BBOX lines printed by render_views.py must agree (same pose)"""
     os.makedirs(a.render_dir, exist_ok=True)
     rv = os.path.join(HERE, "render_views.py")
     name, (lo, hi) = next(iter(S["actions"].items())) if S["actions"] else (None, (0, 0))
-    f = int(round((lo + hi) / 2))
-    # render_views imports FBX takes as "<armature>|<take>" with Blender's default +1 frame offset; glTF from frame 0
-    jobs = [("src", a.src, name, f), ("fbx", a.fbx, "%s|%s" % (S["arm"], name), f - int(lo) + 1),
-            ("glb", a.glb, name, f - int(lo))]
+    fps = int(round(S["fps"]))
+    rv_fps = "--fps" in open(rv).read()          # render_views.py can set the scene rate before importing
+    # Otherwise the glTF importer lays the 30 fps samples onto the factory scene's 24 fps timeline (frame = t * 24):
+    # pick a frame whose time is an exact 24 fps frame too (a multiple of 5 frames at 30 fps).
+    step = 1 if rv_fps else fps // math.gcd(fps, 24)
+    rel = int(round((hi - lo) / 2.0 / step)) * step
+    f = int(lo) + rel
+    glb_frame = rel if rv_fps else rel * 24 // fps
+    # render_views imports FBX takes as "<armature>|<take>" with Blender's default +1 frame offset (the FBX importer
+    # sets the scene to the file's 30 fps itself)
+    jobs = [("src", a.src, name, f), ("fbx", a.fbx, "%s|%s" % (S["arm"], name), rel + 1), ("glb", a.glb, name, glb_frame)]
+    boxes = {}
     for tag, path, act, fr in jobs:
         out = os.path.join(a.render_dir, "export_%s.png" % tag)
-        cmd = [sys.executable, rv, path, out, "--res", str(a.render_res), "--samples", "16",
+        cmd = [sys.executable, rv, path, out, "--res", str(a.render_res), "--samples", "12",
                "--views", "side,front,threequarter,back,head,otherside"]
         if act:
             cmd += ["--action", act, "--frame", str(fr)]
+        if rv_fps:
+            cmd += ["--fps", str(fps)]
         r = subprocess.run(cmd, capture_output=True, text=True)
         bb = [l for l in r.stdout.splitlines() if l.startswith("BBOX")]
+        if bb:
+            nums = [float(x) for x in re.findall(r"-?\d+\.?\d*(?:e-?\d+)?", bb[0])]
+            if len(nums) == 6:
+                boxes[tag] = np.array(nums)
         check("render", tag, r.returncode == 0 and os.path.isfile(out),
               "%s (%s f%d) %s" % (out, act, fr, bb[0] if bb else r.stderr[-200:]))
+    if "src" in boxes and len(boxes) > 1:
+        d = {t: float(np.abs(b - boxes["src"]).max()) for t, b in boxes.items() if t != "src"}
+        w = max(d.values())
+        check("render", "same pose (BBOX)", True if w <= 0.005 else ("WARN" if w <= 0.015 else False),
+              "%s f%d: bounding box vs source %s (the 4-influence skin may move the extremes a few mm)" %
+              (name, f, ", ".join("%s %.1f mm" % (t, e * 1000) for t, e in sorted(d.items()))))
 
 
 def main(argv):
@@ -1208,7 +1748,25 @@ def main(argv):
     ap.add_argument("--src", required=True)
     ap.add_argument("--manifest", default=None, help="default: <fbx dir>/<fbx name>_export_manifest.json if present")
     ap.add_argument("--tol-mm", type=float, default=1.0)
-    ap.add_argument("--samples", type=int, default=12, help="sampled frames per action (plus first/last)")
+    ap.add_argument("--samples", type=int, default=0,
+                    help="sampled frames per action for the bone checks (plus first/last); 0 = every frame (default)")
+    ap.add_argument("--twist-limb-deg", type=float, default=15.0,
+                    help="FAIL: max twist of a leg/hoof bone about its own axis between consecutive frames")
+    ap.add_argument("--twist-warn-deg", type=float, default=35.0, help="WARN: the same for any bone")
+    ap.add_argument("--twist-fail-deg", type=float, default=90.0, help="FAIL: the same for any bone")
+    ap.add_argument("--twist-local-deg", type=float, default=90.0,
+                    help="FAIL: max twist of any bone relative to its parent (candy-wrap)")
+    ap.add_argument("--boundary-ref", default="Idle", help="standing reference clip (its f0) for the one-shot boundary check")
+    ap.add_argument("--boundary-warn-deg", type=float, default=10.0,
+                    help="WARN when a one-shot clip's start/end joint rotations differ more than this from the reference")
+    ap.add_argument("--skin-warn-mm", type=float, default=10.0,
+                    help="skinned-vertex deviation from the source above this is a WARN")
+    ap.add_argument("--skin-fail-mm", type=float, default=60.0,
+                    help="skinned-vertex deviation from the source above this is a FAIL (broken weights / bones)")
+    ap.add_argument("--no-skin-frames", action="store_true",
+                    help="skip the every-frame skinned-vertex check (the slowest check, ~1-3 min)")
+    ap.add_argument("--glb-vram-warn-mb", type=float, default=100.0,
+                    help="WARN when the GLB's embedded images decode to more than this (RGBA8 + mips)")
     ap.add_argument("--json", default=None)
     ap.add_argument("--render-dir", default=None, help="also render source / FBX / GLB contact sheets here")
     ap.add_argument("--render-res", type=int, default=400)
@@ -1233,9 +1791,12 @@ def main(argv):
         check("source", "dropped helpers unweighted", not unsafe, "%s%s" % (S["dropped"], " WEIGHTED: %s" % unsafe if unsafe else ""))
     check("source", "textures", "INFO", "expected: %s; source material images: %s" % (expect_tex, S["textures"]))
 
-    check_fbx_raw(a, S, expect_tex)
+    check_twist(a, S)
+    F = check_fbx_raw(a, S, expect_tex)
+    G = check_glb_raw(a, S, expect_tex)
+    if not a.no_skin_frames:
+        check_skin_frames(a, S, F, G)
     check_fbx_import(a, S, expect_tex)
-    check_glb_raw(a, S, expect_tex)
     check_glb_import(a, S)
     if not a.no_gltf_validator:
         run_gltf_validator(a)

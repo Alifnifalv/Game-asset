@@ -1,5 +1,6 @@
 """Orthographic side-view silhouette of the calf next to (and overlaid on) the side-view reference,
-both normalised to the same withers-to-ground height.  python3 tools/silhouette_compare.py <blend> <ref.png> <out.png>"""
+both cropped to their silhouette bounding box and scaled to the same bounding-box height (ground to the highest point,
+withers or head, whichever is higher; not withers-to-ground).  python3 tools/silhouette_compare.py <blend> <ref.png> <out.png>"""
 import sys, os, numpy as np, bpy
 from mathutils import Vector
 src, ref, out = sys.argv[1:4]

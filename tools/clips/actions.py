@@ -1,6 +1,6 @@
-"""Clip family "actions": Death, Leap, HeadShake for the calf rig.
+"""Clip family "actions": Death, Leap, HeadShake, Death_Lying for the calf rig.
 
-    build(calf) -> ["Death", "Leap", "HeadShake"]
+    build(calf) -> ["Death", "Leap", "HeadShake", "Death_Lying"]
 
 Clips (30 fps)
   Death      70 f, ROOT MOTION ~0.79 m to the calf's right (armature -X; the Root ends under the carcass).
@@ -22,6 +22,15 @@ Clips (30 fps)
              balancing step into the final stance (LF f31-36, RF f33-38) -> Pose() at the new root.
              Landing body height / pitch come from front (elbow line) and rear (hip line) height keys (LEAP_HF /
              LEAP_HR) that were optimised for smooth head / pitch / hip motion under those physical constraints.
+  Death_Lying 60 f, ROOT MOTION (-0.17, +0.38) m (the Root ends under the carcass, as Death). Death while lying
+             (review A5: Die from LieDown / Lying_Idle / GetUp used to snap the calf up to standing and topple it).
+             LYING (== Lying_Idle f0, exact) -> agonal gasp (f0-5) -> the head sags -> the body rolls onto its right
+             side with gravity (8 deg lean f16 -> impact f31), rebounds and settles; the trunk rolls ON the ground
+             (height solved per frame from the Calf_LOD2 trunk verts) -> dead body / head / ears / tail of dead_pose(),
+             held exactly f50-60. Limp legs: the down-side fore stays stretched forward where it lay, the upper fore is
+             carried up by the roll and drops in front of the chest, the hind legs unfold towards the belly side (the
+             upper one in front of the lower one). IK poles blend from the lying family's rule (f0 exact) to the
+             Body-parented ones; hooves turn from the lying orientation to follow their cannon (post-bake, 3 passes).
   HeadShake  36 f. Fly-shaking: head dips, then 2.5 fast (7-frame period, ~4.3 Hz) head roll/yaw oscillations
              that start at the withers and neck base (overlapping action), ears flap with ~1/4-period lag and
              more amplitude than the head, tail flicks, settle with an ear flick. Pose() -> Pose(), legs planted.
@@ -73,7 +82,7 @@ import anim_lib as A
 from anim_lib import Pose, LEGS
 
 FPS = 30
-CLIPS = ("Death", "Leap", "HeadShake")
+CLIPS = ("Death", "Leap", "HeadShake", "Death_Lying")
 FRONT, HIND = ("LF", "RF"), ("LH", "RH")
 LEG_PARENT = {"LF": "Torso2", "RF": "Torso2", "LH": "Back", "RH": "Back"}   # parent of each leg's top bone chain
 
@@ -397,7 +406,8 @@ DEAD = dict(
     jaw=6.0,
     ears={"L": V(-75.0, -20.0, 0.0), "R": V(-50.0, -40.0, 0.0)},
     # tail lies on the ground behind the rump, clear of the lower hind leg (lift = away from the thighs)
-    tail=[(27.0, 10.0), (22.5, 11.0), (15.5, 6.0), (10.0, -0.5), (7.0, -5.5), (5.0, -8.0), (4.0, -8.0)],
+    # (re-expressed for anim_lib's fixed tail swing axis, review A10: same tail shape, 0.000 mm)
+    tail=[(21.18, 12.4), (31.47, 11.0), (2.24, 4.65), (-9.1, 1.3), (-2.39, -4.57), (-2.92, -6.83), (-4.46, -6.15)],
     # upper (left) hooves relative to the lower (right) ones: in front of them, on the ground (no leg crossing)
     upper={"LF": V(-0.14, -0.16, 0.03), "LH": V(0.04, -0.13, 0.02)},
     top_rot={"LF": (-12.0, 0.0, 0.0), "RF": (-6.0, 0.0, 0.0)},
@@ -526,8 +536,10 @@ class DeathModel:
                             (IMP + 13, list(eR)), (H, list(eR))])
         tail_dead = [c for seg in DEAD["tail"] for c in seg]
         clamp = [0.0, -12.0, 0.0, -6.0, 0.0, -2.0] + [0.0] * 8
-        C["tail"] = VCurve([(0, [0.0] * 14), (4, clamp), (10, [2.0, -8.0, 3.0, -3.0, 3.0, 0.0] + [2.0, 0.0] * 4),
-                            (22, [4.0, -4.0] + [2.0, 0.0] * 6), (IMP + 2, tail_dead), (IMP + 9, tail_dead),
+        C["tail"] = VCurve([(0, [0.0] * 14), (4, clamp),
+                            (10, [1.89, -7.98, 3.23, -3.02, 0.17, -0.03, -1.68, 0.06, 0.15, 0.0, 0.58, -0.04, 0.41, -0.05]),
+                            (22, [3.63, -3.94, 3.38, 0.02, 0.42, -0.01, -1.0, 0.02, 0.09, 0.0, 0.47, -0.03, 0.36, -0.04]),
+                            (IMP + 2, tail_dead), (IMP + 9, tail_dead),
                             (H, tail_dead)], size=14)
         C["spine"] = {b: _vkeys([(0, [0.0] * 3), (T0 + 8, [0.0] * 3), (IMP + 6, list(v)), (H, list(v))])
                       for b, v in DEAD["spine"].items()}
@@ -757,6 +769,264 @@ def death_fn(calf):
                 if f <= DEATH_HOLD:
                     m.q_new[(f, leg)] = qc
                 q = Quaternion().slerp(qc, m.limp(leg, ff))
+                M = Matrix.Translation(r[fb].translation) @ (q @ calf.rest[fb].to_quaternion()).to_matrix().to_4x4()
+                basis = (r["Root"] @ calf.rel(fb)).inverted() @ M
+                loc, rot, _ = basis.decompose()
+                vals.append((loc, rot))
+            out[fb] = vals
+        return out
+
+    return N, fn, planted, hook, raw, post
+
+
+# ============================================================================== Death_Lying
+# Death from the lying pose (review A5: the Any State -> Death transition snapped a lying calf up to standing and
+# toppled it). 60 f, root motion. Starts exactly at LYING (clips/lying.py: Lying_Idle's pose, baked with the lying
+# family's IK poles) -> agonal gasp (head up, jaw open, ears back, f0-5) -> the head sags (f5-16) -> the body leans
+# and rolls onto its RIGHT side with gravity (8 deg lean at f16 -> side impact f31, 11.7 deg/f), small rebound,
+# settles -> ends lying flat on the right side with the Death clip's dead body / head / ears / tail (dead_pose())
+# held exactly f50-60. The trunk rolls on the ground: its height is solved per frame from the Calf_LOD2 trunk
+# vertices (lowest trunk point at DL_CONTACT). Legs are limp: the down-side (right) fore stays stretched forward
+# where it lay, the upper (left) fore is carried up by the roll and drops in front of the chest (dead_pose's upper
+# fore), the hind legs unfold and slide out to the belly side (the upper one lifted over the lower one). Hooves turn
+# from the lying orientation to follow their cannon (like Death's limp hooves). Root: moves under the carcass
+# (DL_ROOT_END), as Death.
+DL_N = 60
+DL_HOLD = 50                          # final pose held exactly f50-60
+DL_ROOT_END = V(-0.17, 0.38, 0.0)     # root at the end (armature space; the lying body is 0.40 m behind the root)
+DL_ROLL = (16, 31)                    # the roll accelerates from an 8 deg lean (f16) to the side impact (f31, 88 deg)
+DL_LIMP = {"LF": (12, 30), "RF": (16, 32), "LH": (15, 37), "RH": (17, 37)}   # feet: lying spot -> final spot
+DL_LIFT = {"LF": 0.09, "RF": 0.0, "LH": 0.09, "RH": 0.035}  # the rolling trunk carries the upper legs up
+DL_HIND_END = V(0.16, 0.14, 0.0)      # lower (right) hind: final spot = lying spot + this (slides out, unfolding)
+DL_UPPER_LH = V(0.07, -0.17, 0.05)    # upper hind relative to the lower one (in front of it, clear of it)
+DL_FEMUR_END = {"LH": 18.0, "RH": 24.0}
+DL_POLE = (10, 26)                    # IK poles: lying family rule -> Body-parented (as Death / dead_pose)
+DL_HOOF = (10, 32)                    # hoof orientation: lying (flex about X) -> follows the cannon (limp)
+DL_FLEX = {"LF": 25.0, "RF": 20.0, "LH": 20.0, "RH": 15.0}    # relaxed fetlock flex of the limp legs (deg)
+DL_CONTACT = -0.005                   # lowest trunk vertex (Calf_LOD2) while rolling (LYING itself sits at -0.006)
+DL_PASSES = 3
+
+
+class DeathLyingModel:
+    def __init__(self, calf):
+        import clips.lying as LY
+        self.calf, self.LY = calf, LY
+        self.ly = LY.lying(calf)
+        self.end = dead_pose(calf, DL_ROOT_END)
+        self.end.auto_top = False
+        self.end.femur = dict(self.end.femur); self.end.femur.update(DL_FEMUR_END)
+        self.q_est, self.q_new = {}, {}
+        self.start_feet = {leg: LY.foot_world(calf, self.ly, leg) for leg in LEGS}
+        self.G0 = self.ly.body_off + calf.cog
+        self.G1 = DL_ROOT_END + self.end.body_off + calf.cog
+        ef = {leg: self.end.feet_world[leg].copy() for leg in LEGS}
+        ef["RF"] = self.start_feet["RF"].copy()
+        ef["RH"] = self.start_feet["RH"] + DL_HIND_END
+        ef["LH"] = ef["RH"] + DL_UPPER_LH
+        self.end.feet_world = ef
+        self.end_feet = ef
+        self.dz = {}
+        self._channels()
+        self._contact()
+
+    # ---------------------------------------------------------------- channels
+    def _channels(self):
+        ly, end, C = self.ly, self.end, {}
+        a, b = DL_ROLL
+        rise = [(0, 0.0), (8, 0.0), (a, 8.0, 0.9)]
+        # gravity: theta'' grows with the lean; ~t^2.2 from the 8 deg lean to the impact (11.7 deg/f on arrival)
+        for k in range(1, 8):
+            t = k / 8.0
+            rise.append((a + t * (b - a), 8.0 + 80.0 * t ** 2.2))
+        C["roll"] = Curve(rise + [(b, 88.0, 11.7, 0.8), (b + 2, 90.5), (b + 5, 87.2), (b + 9, 88.0), (DL_HOLD, 88.0)])
+        dp = end.body_rot
+        C["pitch"] = Curve([(0, ly.body_rot.x), (a, ly.body_rot.x + 1.0), (b, dp.x), (DL_HOLD, dp.x)])
+        C["yaw"] = Curve([(0, ly.body_rot.z), (a, -1.0), (b, dp.z), (DL_HOLD, dp.z)])
+        C["root"] = lambda f: smoother((f - (a - 2)) / float(b + 8 - (a - 2)))
+        C["spine"] = {n: VCurve([(0, list(ly.spine.get(n, (0.0, 0.0, 0.0)))), (a, list(ly.spine.get(n, (0.0, 0.0, 0.0)))),
+                                 (b + 4, list(end.spine.get(n, (0.0, 0.0, 0.0)))), (DL_HOLD, list(end.spine.get(n, (0.0, 0.0, 0.0))))])
+                      for n in set(ly.spine) | set(end.spine)}
+        # head: agonal gasp (head up, jaw open, ears back), the head sags forward/down, is carried by the roll (lags
+        # a little) and hits the ground after the body (f33), bounce, settle
+        C["neck"] = VCurve([(0, list(ly.neck)), (4, [-4.0, -4.0, -3.0]), (9, [1.0, 2.0, 2.0]), (16, [3.0, 4.0, 4.0]),
+                            (26, [0.0, 1.0, 0.0]), (b + 2, [10.0, 10.0, 8.0]), (b + 6, [7.0, 7.0, 5.0]),
+                            (b + 12, list(end.neck)), (DL_HOLD, list(end.neck))])
+        C["neck_yaw"] = VCurve([(0, list(ly.neck_yaw)), (16, [2.0, 2.0, 2.0]), (b, [0.0, 0.0, 0.0]),
+                                (b + 8, list(end.neck_yaw)), (DL_HOLD, list(end.neck_yaw))])
+        C["head"] = VCurve([(0, list(ly.head)), (4, [-2.0, 4.0, -4.0]), (9, [7.0, 4.0, -4.0]), (16, [9.0, 2.0, -2.0]),
+                            (26, [4.0, 0.0, 0.0]), (b + 2, [10.0, -5.0, 0.0]), (b + 6, [7.0, -2.0, 0.0]),
+                            (b + 12, list(end.head)), (DL_HOLD, list(end.head))])
+        C["jaw"] = Curve([(0, ly.jaw), (4, 10.0), (10, 4.0), (b - 2, 3.0), (b + 2, 9.0), (b + 9, end.jaw), (DL_HOLD, end.jaw)])
+        C["earL"] = VCurve([(0, list(ly.ears["L"])), (4, [-30.0, -5.0, 6.0]), (16, [-20.0, 20.0, 0.0]),
+                            (b - 3, [-22.0, 0.0, 0.0]), (b + 2, [-50.0, 10.0, 0.0]), (b + 7, [-66.0, -30.0, 0.0]),
+                            (b + 13, list(end.ears["L"])), (DL_HOLD, list(end.ears["L"]))])
+        C["earR"] = VCurve([(0, list(ly.ears["R"])), (4, [-28.0, -5.0, 6.0]), (16, [-18.0, 20.0, 0.0]),
+                            (b - 3, [-22.0, -8.0, 0.0]), (b + 1, [-45.0, -35.0, 0.0]), (b + 6, [-56.0, -32.0, 0.0]),
+                            (b + 13, list(end.ears["R"])), (DL_HOLD, list(end.ears["R"]))])
+        t0 = [c for seg in ly.tail for c in seg]; t1 = [c for seg in end.tail for c in seg]
+        C["tail"] = VCurve([(0, t0), (6, t0), (b + 3, t1), (DL_HOLD, t1)], size=14)
+        C["top"] = {leg: VCurve([(0, [0.0] * 3), (12, [0.0] * 3), (b + 5, list(v)), (DL_HOLD, list(v))])
+                    for leg, v in end.top_rot.items()}
+        C["glide"] = {leg: Curve([(0, 0.0), (12, 0.0), (b + 5, v), (DL_HOLD, v)]) for leg, v in end.glide.items()}
+        C["femur"] = {leg: Curve([(0, ly.femur.get(leg, 0.0)), (DL_LIMP[leg][0], ly.femur.get(leg, 0.0)),
+                                  (DL_LIMP[leg][1], end.femur.get(leg, 0.0)), (DL_HOLD, end.femur.get(leg, 0.0))])
+                      for leg in ("LH", "RH")}
+        C["flex"] = {leg: Curve([(0, ly.flex.get(leg, 0.0)), (DL_HOOF[0], ly.flex.get(leg, 0.0)), (DL_HOOF[1], 0.0),
+                                 (DL_HOLD, 0.0)]) for leg in LEGS}
+        self.C = C
+
+    def roll(self, f):
+        return self.C["roll"](f)
+
+    def G(self, f):
+        """world COG path (the trunk height is then corrected by the contact solve)"""
+        u = min(1.0, max(0.0, self.roll(f) / 88.0))
+        g = self.G0.lerp(self.G1, u)
+        g.z = self.G0.z + (self.G1.z - self.G0.z) * u * u
+        return g
+
+    def _body(self, f):
+        """pose without the feet"""
+        C = self.C
+        P = Pose()
+        P.auto_top = False
+        P.root_pos = DL_ROOT_END * C["root"](f)
+        P.body_off = self.G(f) - self.calf.cog - P.root_pos + V(0.0, 0.0, self.dz.get(f, 0.0))
+        P.body_rot = V(C["pitch"](f), self.roll(f), C["yaw"](f))
+        P.spine = {n: tuple(c(f)) for n, c in C["spine"].items()}
+        P.neck = C["neck"](f); P.neck_yaw = C["neck_yaw"](f)
+        P.head = Vector(C["head"](f)); P.jaw = C["jaw"](f)
+        P.ears = {"L": Vector(C["earL"](f)), "R": Vector(C["earR"](f))}
+        t = C["tail"](f)
+        P.tail = [(t[2 * i], t[2 * i + 1]) for i in range(7)]
+        for leg, c in C["top"].items():
+            P.top_rot[leg] = tuple(c(f))
+        for leg, c in C["glide"].items():
+            P.glide[leg] = c(f)
+        for leg, c in C["femur"].items():
+            P.femur[leg] = c(f)
+        for leg, c in C["flex"].items():
+            P.flex[leg] = c(f)
+        return P
+
+    def _contact(self):
+        """per-frame trunk height: lowest Calf_LOD2 trunk vertex (not weighted to the leg chains / hooves) at
+        DL_CONTACT while the calf rolls; faded to 0 at f8 and at DL_HOLD (exact shared poses there)"""
+        calf = self.calf
+        ob = bpy.data.objects.get("Calf_LOD2")
+        if ob is None:
+            return
+        legb = {n for d in LEGS.values() for n in d["chain"] + (d["foot"], d["toe"])}
+        gi = {g.index: g.name for g in ob.vertex_groups}
+        trunk = np.array([sum(g.weight for g in v.groups if gi.get(g.group) in legb) < 0.2 for v in ob.data.vertices])
+        mods = [m for m in ob.modifiers if m.type == "ARMATURE"]
+        arm = calf.arm
+        if arm.animation_data:
+            arm.animation_data.action = None
+        raw = {}
+        lo, hi = 8, DL_HOLD
+        for f in range(lo, hi + 1):
+            B = calf.pose_to_basis(self._body(f))
+            for pb in arm.pose.bones:
+                pb.matrix_basis = B.get(pb.name, Matrix.Identity(4)) if pb.name not in legb else Matrix.Identity(4)
+            for m in mods:
+                m.show_viewport = True
+            dg = bpy.context.evaluated_depsgraph_get(); oe = ob.evaluated_get(dg)
+            co = np.zeros(len(oe.data.vertices) * 3); oe.data.vertices.foreach_get("co", co)
+            z = co.reshape(-1, 3)[:, 2] + ob.matrix_world.translation.z
+            for m in mods:
+                m.show_viewport = False
+            raw[f] = DL_CONTACT - float(z[trunk].min())
+        for pb in arm.pose.bones:
+            pb.matrix_basis = Matrix.Identity(4)
+        fs = sorted(raw)
+        dil = {f: max(raw[min(hi, max(lo, f + k))] for k in (-2, -1, 0, 1, 2)) for f in fs}
+        sm = {f: sum(dil[min(hi, max(lo, f + k))] * w for k, w in ((-2, 1), (-1, 2), (0, 3), (1, 2), (2, 1))) / 9.0
+              for f in fs}
+        self.dz = {f: sm[f] * smooth((f - lo) / 8.0) * smooth((hi - f) / 8.0) for f in fs}
+
+    def limp(self, leg, f):
+        a, b = DL_LIMP[leg]
+        return smooth((f - a) / float(b - a))
+
+    def hoof_w(self, f):
+        return smooth((f - DL_HOOF[0]) / float(DL_HOOF[1] - DL_HOOF[0]))
+
+    def hoof_q(self, leg, f, P):
+        """world hoof rotation (relative to rest) this pass assumes: lying style (flex about X) -> cannon-following"""
+        q0 = Matrix.Rotation(math.radians(P.flex.get(leg, 0.0)), 3, "X").to_quaternion()
+        q1 = self.q_est.get((f, leg))
+        if q1 is None:
+            q1 = body_rot_matrix(P).to_quaternion()
+        return q0.slerp(q1, self.hoof_w(f))
+
+    def pose(self, f):
+        P = self._body(f)
+        for leg in LEGS:
+            u = self.limp(leg, f)
+            p = self.start_feet[leg].lerp(self.end_feet[leg], smoother(u))
+            p.z += DL_LIFT[leg] * math.sin(math.pi * u) ** 2
+            if 0.0 < u:
+                p.z = max(p.z, hoof_floor(leg, self.hoof_q(leg, f, P)))
+            P.feet_world[leg] = p
+        return P
+
+    def cannon_q(self, leg, M_lower):
+        lo = LEGS[leg]["chain"][1]
+        D = M_lower.to_quaternion() @ self.calf.rest[lo].to_quaternion().inverted()
+        axis = D @ Vector((1, 0, 0))
+        return Quaternion(axis, math.radians(DL_FLEX[leg])) @ D
+
+
+def death_lying_fn(calf):
+    """returns (N, pose fn, planted fn, basis hook, raw pose fn, post-bake fn)"""
+    key = ("dl", id(calf))
+    if key not in _MODELS:
+        _MODELS[key] = DeathLyingModel(calf)
+    m = _MODELS[key]
+    LY = m.LY
+    N = DL_N
+
+    def raw(f):
+        return m.pose(f)
+
+    def fn(f):
+        if f <= 0:
+            P = LY.cp(m.ly); P.kneel = {}
+            return P
+        if f >= DL_HOLD:
+            return m.pose(DL_HOLD)
+        return raw(f)
+
+    def planted(leg, f):
+        """feet lie where they were until the leg goes limp (the calf is lying: nothing bears weight)"""
+        return f <= DL_LIMP[leg][0]
+
+    def hook(f, P, B):
+        """IK poles: the lying family's rule (so f0 == Lying_Idle f0) blended into the Body-parented poles"""
+        M = calf._last_pose
+        w = smooth((min(f, DL_HOLD) - DL_POLE[0]) / float(DL_POLE[1] - DL_POLE[0]))
+        for leg, d in LEGS.items():
+            E = M[d["chain"][0]].translation; F = calf._last_feet[leg]
+            if leg in ("LF", "RF"):
+                pl = LY.front_pole(calf, P, leg, E, F)
+            else:
+                pl = LY.hind_pole(calf, leg, E, F)
+            pos = pl.lerp(M[d["pole"]].translation, w)
+            B[d["pole"]] = calf.basis_for(d["pole"], M, Matrix.Translation(pos) @ calf.rest[d["pole"]].to_3x3().to_4x4())
+
+    def post(rows):
+        out = {}
+        for leg, d in LEGS.items():
+            fb, lo = d["foot"], d["chain"][1]
+            vals = []
+            for f, r in enumerate(rows):
+                ff = min(f, DL_HOLD)
+                qc = m.cannon_q(leg, r[lo])
+                m.q_new[(f, leg)] = qc
+                Pf = fn(f)
+                q0 = Matrix.Rotation(math.radians(Pf.flex.get(leg, 0.0)), 3, "X").to_quaternion()
+                q = q0.slerp(qc, m.hoof_w(ff))
                 M = Matrix.Translation(r[fb].translation) @ (q @ calf.rest[fb].to_quaternion()).to_matrix().to_4x4()
                 basis = (r["Root"] @ calf.rel(fb)).inverted() @ M
                 loc, rot, _ = basis.decompose()
@@ -1034,7 +1304,8 @@ def clip_fns(calf):
     key = ("fns", id(calf))
     if key not in _MODELS:
         _init(calf)
-        _MODELS[key] = {"Death": death_fn(calf), "Leap": leap_fn(calf), "HeadShake": headshake_fn(calf)}
+        _MODELS[key] = {"Death": death_fn(calf), "Leap": leap_fn(calf), "HeadShake": headshake_fn(calf),
+                        "Death_Lying": death_lying_fn(calf)}
     return _MODELS[key]
 
 
@@ -1043,16 +1314,20 @@ def build(calf, only=None):
     for name, (N, fn, planted, hook, raw, post) in clip_fns(calf).items():
         if only and name not in only:
             continue
-        passes = DEATH_PASSES if name == "Death" else 1
+        passes = {"Death": DEATH_PASSES, "Death_Lying": DL_PASSES}.get(name, 1)
         for it in range(passes):
+            m = None
             if name == "Death":
                 m = _death_model(calf)
                 m.q_est = dict(m.q_new)
                 m._dead()
+            elif name == "Death_Lying":
+                m = _MODELS[("dl", id(calf))]
+                m.q_est = dict(m.q_new)
             make_clip_ex(calf, name, N, fn, loop=False, basis_hook=hook, post_bake=post)
-            if name == "Death" and m.q_est:
+            if m is not None and m.q_est:
                 d = max((math.degrees(m.q_est[k].rotation_difference(m.q_new[k]).angle), k) for k in m.q_est)
-                print(f"  Death pass {it + 1}: limp-hoof orientation, baked vs assumed {d[0]:.3f} deg {d[1]}")
+                print(f"  {name} pass {it + 1}: limp-hoof orientation, baked vs assumed {d[0]:.3f} deg {d[1]}")
         made.append(name)
     return made
 
@@ -1512,9 +1787,10 @@ def run_qa(calf, names, lod0=True):
         print(f"OVERLAP {n}: LOD2 limb/tail self-intersections max {mo[0]} polygon pairs ({mo[1]} f{mo[2]}) | "
               f"worst bone-capsule overlap {co_[0]*1000:.1f} mm ({co_[1]} f{co_[2]}) (<= 0 = clear)")
         extra = ""
-        if n == "Death":        # after the impact every leg rests: none may be held up by the IK reach clamp
-            wr = max((e, leg, f_) for f_ in range(D_IMP, N + 1) for leg, e in calf.reach_excess(fn(f_)).items())
-            extra = f" | all legs f{D_IMP}-{N} (resting) {wr[0]*1000:.1f} mm ({wr[1]} f{wr[2]})"
+        if n in ("Death", "Death_Lying"):   # after the impact every leg rests: none may be held up by the reach clamp
+            f_imp = D_IMP if n == "Death" else DL_ROLL[1]
+            wr = max((e, leg, f_) for f_ in range(f_imp, N + 1) for leg, e in calf.reach_excess(fn(f_)).items())
+            extra = f" | all legs f{f_imp}-{N} (resting) {wr[0]*1000:.1f} mm ({wr[1]} f{wr[2]})"
         print(f"REACH {n}: worst planted-leg reach excess {rr[0]*1000:.1f} mm ({rr[1]} f{rr[2]}){extra} (>0 = clamped)")
         tops = ", ".join(f"{b} {v:.1f} f{f_}" for v, b, f_ in sm["top"][:4])
         print(f"SMOOTH {n}: max rot 2nd diff (deg/f^2): {tops} | max loc 2nd diff {sm['loc_acc'][0]:.2f} mm/f^2 "
@@ -1535,13 +1811,27 @@ def run_qa(calf, names, lod0=True):
         print(f"RESIDUAL {n}: raw curves vs shared pose at f0 {r0:.2e}, at f{N} {r1:.2e}"
               + (f", at hold start f{DEATH_HOLD} {rh:.2e}" if n == "Death" else "") + " (deg / m)")
         report[n] = dict(q, mesh=m, carpus=car, hock=hoc, smooth=sm, reach=rr, fetlock=fa, contact=cs, overlap=ov)
-    # boundaries: every clip starts at Pose(); Leap / HeadShake end at Pose() (root-relative)
-    ref = None
+    # boundaries: every clip starts at Pose() (Death_Lying: at LYING == Lying_Idle f0); Leap / HeadShake end at
+    # Pose() (root-relative)
+    ref = bone_states(calf, calf.make_clip("_PoseRef", 0, lambda f: stand_pose(), loop=False), [0])[0]
+    bpy.data.actions.remove(bpy.data.actions["_PoseRef"])
     for n in names:
         act = bpy.data.actions[n]; N = int(act.frame_range[1])
         st = bone_states(calf, act, [0, N])
-        if ref is None:
-            ref = st[0]
+        if n == "Death_Lying":
+            import clips.lying as LY
+            lref = LY.make_clip_ex(calf, "_LyingRef", 0, lambda f: LY.lying(calf))
+            lst = bone_states(calf, lref, [0])[0]
+            bpy.data.actions.remove(lref)
+            dl, da, dp = state_diff(st[0], lst)
+            print(f"BOUNDARY {n} start vs LYING (Lying_Idle f0): max loc {dl*1000:.4f} mm, rot {da:.4f} deg, "
+                  f"root-rel pos {dp*1000:.4f} mm")
+            s2 = bone_states(calf, act, [DL_HOLD, N])
+            dl, da, dp = state_diff(s2[0], s2[1], skip_root=False)
+            print(f"HOLD {n}: f{DL_HOLD} vs f{N}: loc {dl*1000:.4f} mm, rot {da:.4f} deg")
+            calf.use_action(act); calf.sc.frame_set(N)
+            print(f"ROOT {n}: end root position {tuple(round(x, 4) for x in calf.arm.pose.bones['Root'].location)} (local)")
+            continue
         dl, da, dp = state_diff(st[0], ref)
         print(f"BOUNDARY {n} start vs Pose(): max loc {dl*1000:.4f} mm, rot {da:.4f} deg, root-rel pos {dp*1000:.4f} mm")
         if n != "Death":
@@ -1565,6 +1855,7 @@ RENDER = {  # clip -> (strip frames a:b:step, sides)
     "Death": ("0:70:4", ("threequarter", "left")),
     "Leap": ("0:40:2", ("left",)),
     "HeadShake": ("0:36:2", ("front",)),
+    "Death_Lying": ("0:60:4", ("threequarter", "left")),
 }
 
 if __name__ == "__main__":

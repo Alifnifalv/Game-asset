@@ -1,7 +1,12 @@
 """Headless turntable/contact-sheet renderer (Cycles CPU).
 
 Usage: python3 tools/render_views.py <model.glb|.blend|.fbx> <out.png> [--frame N] [--action NAME] [--res 480]
+                                     [--samples 24] [--views side,front,threequarter,back,top,head]
 Renders side / front / 3-4 / top / back / close-up-head views into one contact sheet.
+Keep --samples <= 12 on the shared 4-core container (the default is 24).
+--action: if no action has exactly this name the rest pose is rendered WITHOUT a warning. Blender's FBX importer names
+the actions "<armature>|<take>", so for Unity/Calf/Calf.fbx pass e.g. --action "CalfRig|Walk"; .blend and .glb keep
+the plain clip names.
 """
 import sys, math, os, argparse
 import bpy

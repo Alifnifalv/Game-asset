@@ -4,7 +4,7 @@ so skin binding and the existing baked actions stay valid.
 
 Input : build/stage_a.blend      Output: build/stage_b.blend
 Objects out:
-  CalfRig          armature (43 bones, names from stage A), meters, head toward -Y, ground z=0
+  CalfRig          armature (46 bones: the 43 from stage A + Jaw, Ear.L, Ear.R), meters, head toward -Y, ground z=0
   Calf_LOD0        subdiv-2 skinned mesh, materials [M_Calf_Body, M_Calf_Eye], UV "UVMap"
   Calf_LOD1        subdiv-1 skinned mesh (same UVs)
   Calf_LOD2        cage skinned mesh (same UVs)
@@ -18,19 +18,31 @@ from mathutils.geometry import intersect_point_line
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "build", "stage_a.blend")
 OUT = os.path.join(ROOT, "build", "stage_b.blend")
+if __name__ == "__main__":      # optional --in/--out (defaults = the build pipeline paths)
+    import argparse
+    _ap = argparse.ArgumentParser(description="calf stage B")
+    _ap.add_argument("--in", dest="inp", default=SRC)
+    _ap.add_argument("--out", default=OUT)
+    _a = _ap.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:])
+    SRC, OUT = os.path.abspath(_a.inp), os.path.abspath(_a.out)
 
 P = dict(                # all in ORIGINAL model units (1 unit ~= 22.5 cm after scaling)
     x_scale=0.90,        # narrower young body
     torso_compress=0.72, torso_y0=-1.45, torso_y1=1.75, torso_blend=0.35,
-    head_scale=1.22, muzzle_compress=0.84, head_widen=1.10,
+    # head 0.97: poll-to-nose 0.36 m = 0.35 x withers, as the GiM side view (1.22 gave 0.436 m = 0.43 x withers)
+    head_scale=0.97, muzzle_compress=0.84, head_widen=1.10,
     flank_lift=0.30, flank_y0=-0.6, flank_y1=1.6,   # tucked-up calf flank / higher rear underline
-    ear_scale=1.20,
+    ear_scale=1.40,      # ~0.19 m ears on the smaller head
+    ear_flat=0.3, ear_cup=0.08,   # thin cupped leaf ears: thickness x0.3 about the ear plane (~8 mm), leaf bent into a cup
     leg_thin={"FrontUpperLeg": 0.82, "FrontLowerLeg": 0.78, "BackUpperLeg": 0.76,
               "BackLowerLeg": 0.76, "IKFrontLeg": 0.82, "IKBackLeg": 0.82,
               "FF": 0.86, "FFB": 0.86, "BackLeg": 0.88},
-    neck_thin=1.0, tail_thin=0.75,
-    neck_deepen=1.28,   # deeper throat/brisket line under the neck bones
-    eye_radius_mul=1.12, eye_protrude=0.32, eye_open=1.55, eye_open_ring=1.2,   # protrude 0.45 showed a glossy rim past the lids
+    neck_thin=1.0, tail_thin=0.95,
+    tail_switch=1.8,     # bushy switch: radial flare of the lower tail (Tail6 -> Tail7), pointed tip
+    neck_deepen=1.10,    # throat/jaw line under the neck bones (1.28 hung 3-17 cm below the GiM throat)
+    # eye opening ~35 mm (~10% of head length, GiM 8-10%); the eyeball sits inside the lid rim
+    eye_radius_mul=1.12, eye_protrude=0.25, eye_open=0.85, eye_open_ring=0.95,
+    tuft_height=0.10, tuft_radius=0.24,   # raised forehead tuft (white blaze) at the poll: 2.2 cm on the cage = ~1.1 cm after subdivision, ~5 cm radius
     meters=0.225,        # withers ~1.0 m
     jaw_hinge=(-4.0, 3.15), jaw_front=(-5.05, 2.95), jaw_soft=0.09,   # (y, z) mouth line, original units
     ear_root_x=0.52, ear_soft=0.13,
@@ -198,6 +210,82 @@ for i, c in enumerate(cos):
         root_s.x *= P["head_widen"]
         p = new[i]
         new[i] = p + w * (P["ear_scale"] - 1.0) * (p - root_s)
+
+# ears as thin cupped leaves (the twice-subdivided source ear is a 5-6 cm thick mitten): per ear, principal axes
+# of the core verts; offsets along the thickness axis scale by (1 - w*(1-ear_flat)); then the whole leaf (both
+# faces, so the thickness is kept and nothing folds through) is bent away from the inner side (orig_part 1) by
+# ear_cup*(1-r^2), r = normalised in-plane radius: the inner face becomes a hollow cup opening forward.
+if P["ear_flat"] != 1.0 or P["ear_cup"]:
+    import numpy as _np
+    _part = me.attributes["orig_part"].data
+    _inner = {vi for pl in me.polygons if _part[pl.index].value == 1 for vi in pl.vertices}
+    for side in (1, -1):
+        ids = [i for i, c in enumerate(cos) if c.x * side > 0 and -4.15 < c.y < -3.45 and 3.65 < c.z < 4.45
+               and abs(c.x) > P["ear_root_x"]]
+        if len(ids) < 10: continue
+        wts = _np.array([smoothstep(P["ear_root_x"], P["ear_root_x"] + P["ear_soft"], abs(cos[i].x)) for i in ids])
+        X = _np.array([new[i][:] for i in ids])
+        core = X[wts > 0.5]; cen = core.mean(0)
+        _, _, Vt = _np.linalg.svd(core - cen, full_matrices=False)
+        ax_len, ax_w, ax_n = Vt[0], Vt[1], Vt[2]
+        inn = _np.array([i in _inner for i in ids])
+        sel = inn & (wts > 0.5)
+        sgn = _np.sign(((X[sel] - cen) @ ax_n).mean()) if sel.any() else 1.0
+        L_ = _np.abs((core - cen) @ ax_len).max(); W_ = _np.abs((core - cen) @ ax_w).max()
+        for k_, i in enumerate(ids):
+            d = X[k_] - cen; t = d @ ax_n
+            q = X[k_] - ax_n * t * (1 - P["ear_flat"]) * wts[k_]
+            if P["ear_cup"]:
+                r2 = min(1.0, (d @ ax_len / L_) ** 2 + (d @ ax_w / W_) ** 2)
+                q = q - ax_n * sgn * P["ear_cup"] * (1 - r2) * wts[k_]
+            new[i] = Vector(q.tolist())
+        print("ears: side %+d flattened x%.2f, cup %.3f, %d verts" % (side, P["ear_flat"], P["ear_cup"], len(ids)))
+
+# tail switch: flare the radial offset of the lower tail about the tail axis (Tail6 head -> Tail7 tail, extended
+# through the tip cap): full flare over Tail7, tapering back to a point at the tip
+if P["tail_switch"] != 1.0:
+    _t6h, _t7h, _t7t = (bones["Tail6"].head_local.copy(), bones["Tail7"].head_local.copy(),
+                        bones["Tail7"].tail_local.copy())
+    _tail_ids = {g.index for g in ob.vertex_groups if g.name.startswith("Tail")}
+    n_sw = 0
+    for v in me.vertices:
+        tot = sum(g.weight for g in v.groups) or 1.0
+        wt = sum(g.weight for g in v.groups if g.group in _tail_ids) / tot
+        if wt <= 1e-3: continue
+        p = new[v.index]
+        best = None
+        for k_, (a_, b_) in enumerate(((_t6h, _t7h), (_t7h, _t7t))):
+            seg = b_ - a_; s_ = (p - a_).dot(seg) / seg.length_squared
+            s_ = max(0.0, s_) if k_ == 1 else max(0.0, min(1.0, s_))     # the last segment runs on through the tip
+            q = a_ + seg * s_
+            if best is None or (p - q).length < best[0]: best = ((p - q).length, k_ + s_, q)
+        _, u, q = best
+        if u <= 0.8: continue
+        # teardrop: widest over the upper Tail7, tapering to a point below the bone tip (reads as a hair tuft)
+        fl = 1.0 + (P["tail_switch"] - 1.0) * smoothstep(0.8, 1.3, u)
+        fl = fl + (0.35 - fl) * smoothstep(1.45, 2.4, u)
+        new[v.index] = q + (p - q) * (1.0 + (fl - 1.0) * wt)
+        n_sw += 1
+    print("tail switch: flare x%.2f on %d verts" % (P["tail_switch"], n_sw))
+
+# forehead tuft: raise the poll between the ears (the white blaze sits there; GiM shows it as a fluffy tuft in the
+# side profile). Bell falloff around the upper forehead midline, along the cage vertex normal, Head-driven verts only.
+if P["tuft_height"]:
+    _A, _B = Vector((0.0, -3.99, 4.445)), Vector((0.0, -4.30, 4.25))
+    _hg = {ob.vertex_groups[n].index for n in ("Head",) + REGION_GROUPS}
+    n_tf = 0
+    for v in me.vertices:
+        c = cos[v.index]
+        if abs(c.x) > 0.45 or c.z < 4.0: continue
+        tot = sum(g.weight for g in v.groups) or 1.0
+        wh = sum(g.weight for g in v.groups if g.group in _hg) / tot
+        seg = _B - _A; s_ = max(0.0, min(1.0, (c - _A).dot(seg) / seg.length_squared)); q = _A + seg * s_
+        d = (c - q).length
+        if d >= P["tuft_radius"] or wh <= 0.3: continue
+        b = (1.0 - (d / P["tuft_radius"]) ** 2) ** 2
+        new[v.index] = new[v.index] + v.normal * (P["tuft_height"] * b * min(1.0, wh / 0.8))
+        n_tf += 1
+    print("forehead tuft: %d verts raised (max %.3f units)" % (n_tf, P["tuft_height"]))
 
 for v in me.vertices:
     v.co = new[v.index]

@@ -1,13 +1,22 @@
 """Build the complete calf animation set.
 
-python3 tools/calf_animations.py [--in build/stage_b.blend] [--out build/stage_d.blend] [--only walk,trot,...] [--no-families]
+python3 tools/calf_animations.py [--in build/stage_b.blend] [--out build/stage_d.blend] [--no-families]
+  The pipeline (tools/build_all.sh) passes --in build/stage_c.blend (stage B + textured materials); the default
+  --in stage_b.blend gives a stage D without textures.
+  Side effect: step 1 ALWAYS writes build/stage_b_rebaked.blend, whatever --out says, so a run with a scratch --out
+  still writes into build/, and two runs at the same time race on that file.
 
 Pipeline
   1. re-solve leg IK of the imported clips (Eating, Idle) on the reshaped rig   (tools/rebake_leg_ik.py)
   2. gaits from tools/anim_gait.py: Walk/Trot/Gallop with root motion (*_RM) + in place, TurnLeft90/TurnRight90
-  3. key-pose clip families from tools/clips/*.py (each exposes build(calf) -> [action names])
+  3. key-pose clip families: every tools/clips/*.py whose name does not start with "_", in sorted filename order;
+     each exposes build(calf) -> [action names]
   4. export rig: hoof bones re-parented under the lower legs, every clip re-baked (engine blending safe)
-  5. save; print a QA table (IK gap / planted slide / loop seam per clip)
+  5. save; print a QA table (IK gap / pastern drop / planted slide / loop seam per clip), measured on the authoring
+     hierarchy before step 4. It only prints: no limits, no exit code. "planted slide" is measured only for
+     Walk_RM/Trot_RM/Gallop_RM (the only clips given a planted_fn); every other clip prints 0.00 without a
+     measurement. "fetlock loop seam" is meaningless for one-shot clips. Limits and known values: CLAUDE.md
+     "Verification gate".
 """
 import argparse, importlib, os, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE)

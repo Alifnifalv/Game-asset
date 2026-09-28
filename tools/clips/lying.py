@@ -501,7 +501,8 @@ def stand():
     return P
 
 
-LYING_TAIL = ((0.0, -8.0), (0.0, -5.0), (0.0, 0.0), (0.0, 5.0), (6.0, 10.0), (12.0, 25.0), (14.0, 30.0))
+# (tail values re-expressed for anim_lib's fixed tail swing axis, review A10: same tail shape as before, 0.000 mm)
+LYING_TAIL = ((0.0, -8.0), (0.0, -5.0), (0.0, 0.0), (0.0, 5.0), (0.85, 9.96), (9.03, 23.58), (19.08, 24.09))
 D_STAND = 0.990         # loaded standing fore leg: elbow-fetlock distance / chain length (rest 0.996, library clamp 0.992)
 EXT_REACH = 0.982       # fore leg stretched forward while lying (carpus ~20 deg, knee slightly up)
 EXT_FLEX = -48.0        # its hoof points forward, sole facing forward/down
@@ -657,7 +658,7 @@ def hind_lowering(calf):
     P.spine = {"Back": (0.0, 0.0, 0.4 * HIP_ROLL), "Torso": (0.0, 0.0, -0.4 * HIP_ROLL)}
     P.neck = [6.0, 6.0, 4.0]
     P.head = Vector((6.0, 1.0, 0.0))
-    P.tail = [(0.0, -10.0), (0.0, -6.0), (0.0, -4.0), (2.0, 0.0), (3.0, 0.0), (3.0, 0.0), (2.0, 0.0)]
+    P.tail = [(0.0, -10.0), (0.0, -6.0), (0.0, -4.0), (-0.14, 0.0), (-0.02, 0.0), (0.44, -0.03), (0.36, -0.04)]
     solve_body(calf, P, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", 0.14),
                          hip_z_res(calf, 0.50)], ["y", "z", "pitch", "roll"])
     for leg in HIND:
@@ -772,7 +773,7 @@ def get_up(calf, N=150):
     lunge = kneel(calf, hip=0.52, ahead=0.12)
     lunge.spine = {"Back": (0.0, 0.0, 0.1 * HIP_ROLL), "Torso": (0.0, 0.0, -0.1 * HIP_ROLL)}
     lunge.neck = [8.0, 9.0, 7.0]; lunge.head = Vector((8.0, 0.0, 0.0))
-    lunge.tail = [(0.0, -10.0), (0.0, -6.0), (0.0, -2.0), (2.0, 6.0), (3.0, 8.0), (3.0, 6.0), (2.0, 4.0)]
+    lunge.tail = [(0.0, -10.0), (0.0, -6.0), (0.0, -2.0), (0.06, 6.0), (0.68, 7.97), (1.28, 5.91), (1.07, 3.9)]
     for leg in HIND:
         lunge.feet[leg], lunge.flex[leg] = gat[leg]
         solve_femur(calf, lunge, leg, 0.19)
@@ -817,8 +818,12 @@ def get_up(calf, N=150):
                    (N, rest, "stop")]}
     for leg, t0, t1 in (("LH", 26, 56), ("RH", 28, 61)):
         a = foot_of(ly, leg)
+        # step forward under the hips (review A13): the hoof rises with little flex (a flexed hoof drags its toe),
+        # travels high, and comes down onto its spot almost vertically with zero speed (it used to touch down 2 frames
+        # early while still moving 29 / 18 mm/f and then rebound 8 mm)
         feet[leg] = [(0, a, "stop"), (t0, a, "stop"), (t0 + 6, lifted(a, gat[leg], 0.5, 0.02, -25.0)),
-                     (t0 + 12, gat[leg], "stop"), (t1, gat[leg], "stop"), (t1 + 4, lifted(gat[leg], rest, 0.5, 0.04, 30.0)),
+                     (t0 + 12, gat[leg], "stop"), (t1, gat[leg], "stop"),
+                     (t1 + 3, lifted(gat[leg], rest, 0.35, 0.035, 10.0)), (t1 + 6, lifted(gat[leg], rest, 0.93, 0.03, 4.0)),
                      (t1 + 9, rest, "stop"), (N, rest, "stop")]
     # mid-gather: hind hooves in the air on their way under the belly; femurs keep the hind joints in range
     gm = A.blend_pose(folded, gather, 0.5); gm.auto_top = False

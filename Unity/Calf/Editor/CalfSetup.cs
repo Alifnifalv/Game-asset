@@ -2,13 +2,19 @@
 // Menu: Tools > Calf > Setup Calf Asset
 //
 // Put the whole Unity/Calf folder anywhere under Assets/ (e.g. Assets/Calf). The script finds Calf.fbx next to it and:
-//   1. configures the model importer (Generic rig, Root as motion node, imported tangents, bones kept, per-clip loop/root-motion settings)
+//   1. configures the model importer: Generic rig, Rig tab > Root node = the "Root" bone (the Avatar's root-motion bone),
+//      imported tangents, bones kept, per-clip loop and Root Transform bake settings
 //   2. configures texture importers (normal map type, linear data maps, 4K)
-//   3. creates materials for the active render pipeline (URP Lit / HDRP Lit / Built-in Standard) and remaps the FBX materials
-//   4. creates an Animator Controller (Speed blend tree + graze / lie / call / leap / shake / eat / turn / death states)
-//   5. saves a prefab (Calf.prefab) with Animator (root motion on) and a LODGroup
+//   3. creates materials for the active render pipeline (URP Lit / HDRP Lit / Built-in Standard) and remaps the FBX
+//      materials; in URP also M_Calf_Fur for the optional shell fur (Fur/CalfFur.cs)
+//   4. creates Calf.controller, or rebuilds it in place: Idle state, Speed (m/s) blend tree over the root-motion gaits,
+//      graze / lie / one-shot / turn states, and death from the standing states
+//   5. saves Calf.prefab (a variant of the model) with the Animator (root motion on) and the LODGroup thresholds
+// Running it again is safe: materials, controller and prefab keep their asset GUIDs (hand edits to the controller and
+// the prefab are replaced).
 //
-// NOTE: written without access to a Unity editor in the build environment; verified against the documented Unity 2021.3+/6 APIs.
+// NOTE: written without access to a Unity editor in the build environment. It compiles (C# 9) against stubs of the
+// Unity 2021.3+ / 6 APIs it uses; the import itself still needs one check in Unity (see README "Not verified").
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
@@ -23,13 +29,19 @@ namespace CalfAsset.EditorTools
 {
     public static class CalfSetup
     {
-        // clip name -> (loop, root motion kind)
+        const string RootBone = "Root";
+
+        // clip name -> (loop, root motion kind). Calf_export_manifest.json (next to the FBX) wins for the loop flag and
+        // fills in takes this table does not know; a mismatch is logged.
         enum RootMotion { None, Translate, TranslateAndTurn, Turn }
         static readonly Dictionary<string, (bool loop, RootMotion rm)> ClipSpec = new Dictionary<string, (bool, RootMotion)>
         {
             { "Idle", (true, RootMotion.None) }, { "Idle_LookAround", (true, RootMotion.None) }, { "Eating", (true, RootMotion.None) },
+            { "Stand", (true, RootMotion.None) },
             { "Walk", (true, RootMotion.None) }, { "Trot", (true, RootMotion.None) }, { "Gallop", (true, RootMotion.None) },
+            { "Walk_Slow", (true, RootMotion.None) },
             { "Walk_RM", (true, RootMotion.Translate) }, { "Trot_RM", (true, RootMotion.Translate) }, { "Gallop_RM", (true, RootMotion.Translate) },
+            { "Walk_Slow_RM", (true, RootMotion.Translate) },
             { "TurnLeft90", (false, RootMotion.Turn) }, { "TurnRight90", (false, RootMotion.Turn) },
             { "Graze_Start", (false, RootMotion.None) }, { "Graze_Loop", (true, RootMotion.None) }, { "Graze_End", (false, RootMotion.None) },
             { "Call", (false, RootMotion.None) }, { "HeadShake", (false, RootMotion.None) },
@@ -37,11 +49,24 @@ namespace CalfAsset.EditorTools
             { "Death", (false, RootMotion.Translate) }, { "Leap", (false, RootMotion.Translate) },
         };
 
-        // locomotion blend thresholds (m/s) = clip root speeds from tools/anim_gait.py
+        // Speed blend tree children and their root speeds in m/s (export values; the thresholds use the root speed Unity
+        // measures on the imported clip, and a difference of more than 10% is logged). Stand / Walk_Slow_RM are used when
+        // the FBX has them: Stand is a 0 m/s clip exactly as long as Walk_Slow_RM, so that pair blends at w x 0.45 m/s.
+        // Idle is NOT a child: Unity plays the weighted average of the children's lengths, and the 3.3 s Idle stretched
+        // the 0.8 s walk cycle (Speed 0.46 gave 0.18 m/s). It is its own state instead.
         static readonly (string clip, float speed)[] Locomotion =
         {
-            ("Idle", 0f), ("Walk_RM", 0.93f), ("Trot_RM", 2.34f), ("Gallop_RM", 4.39f)
+            ("Stand", 0f), ("Walk_Slow_RM", 0.45f), ("Walk_RM", 0.93f), ("Trot_RM", 2.34f), ("Gallop_RM", 4.39f)
         };
+        const float SpeedStart = 0.1f, SpeedStop = 0.05f;     // Idle -> Locomotion above 0.1 m/s, back below 0.05 m/s
+
+        // one-shots: played once from Idle / Locomotion, then back to Locomotion (Speed > 0.1) or Idle
+        static readonly (string clip, string trigger)[] OneShots =
+        {
+            ("Eating", "Eat"), ("Call", "Call"), ("HeadShake", "HeadShake"), ("Leap", "Leap"),
+            ("TurnLeft90", "TurnLeft"), ("TurnRight90", "TurnRight"), ("Idle_LookAround", "LookAround")
+        };
+        const string ReadyTag = "Ready", DeadTag = "Dead";   // state tags for game code (Animator.GetCurrentAnimatorStateInfo(0).IsTag)
 
         [MenuItem("Tools/Calf/Setup Calf Asset")]
         public static void Setup()
@@ -58,7 +83,7 @@ namespace CalfAsset.EditorTools
             AssetDatabase.Refresh();
 
             var mats = CreateMaterials(dir);
-            ConfigureModel(fbx, mats);
+            ConfigureModel(fbx, dir, mats);
             var ctrl = CreateController(dir, fbx);
             var prefab = CreatePrefab(dir, fbx, ctrl);
             Selection.activeObject = prefab;
@@ -100,8 +125,10 @@ namespace CalfAsset.EditorTools
                 string n = Path.GetFileNameWithoutExtension(p);
                 bool normal = n.EndsWith("_Normal");
                 bool color = n.EndsWith("_BaseColor");
+                // Default type for every data map, AO included: URP / Built-in Lit read occlusion from G, which a
+                // single-channel (R8 / BC4) import would leave at 0
                 ti.textureType = normal ? TextureImporterType.NormalMap : TextureImporterType.Default;
-                ti.sRGBTexture = color;                       // data maps (mask, roughness, AO, height, normal) are linear
+                ti.sRGBTexture = color;                       // data maps (mask, roughness, AO, fur mask/noise, normal) are linear
                 ti.maxTextureSize = 4096;
                 ti.mipmapEnabled = true;
                 ti.alphaIsTransparency = false;
@@ -135,8 +162,23 @@ namespace CalfAsset.EditorTools
 
             result["M_Calf_Body"] = MakeLit(mdir + "/M_Calf_Body.mat", pipe, baseColor, normal, urpMS, hdrpMask, ao, 1.0f);
             result["M_Calf_Eye"] = MakeLit(mdir + "/M_Calf_Eye.mat", pipe, eye, eyeN, null, null, null, 0.92f);
+            if (pipe == "URP") MakeFur(mdir + "/M_Calf_Fur.mat", baseColor, Tex(dir, "T_Calf_FurMask"), Tex(dir, "T_Fur_Noise"));
             AssetDatabase.SaveAssets();
             return result;
+        }
+
+        // Shell fur material for Fur/CalfFur.cs (not assigned anywhere: add CalfFur to a calf and drag this in)
+        static void MakeFur(string path, Texture2D albedo, Texture2D mask, Texture2D noise)
+        {
+            var shader = Shader.Find("Calf/URP/ShellFur");
+            if (shader == null) return;                       // Fur/ folder not imported (it is optional)
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null) { mat = new Material(shader); AssetDatabase.CreateAsset(mat, path); }
+            else mat.shader = shader;
+            if (albedo) mat.SetTexture("_BaseMap", albedo);
+            if (mask) mat.SetTexture("_FurMask", mask);
+            if (noise) mat.SetTexture("_FurNoise", noise);
+            EditorUtility.SetDirty(mat);
         }
 
         static Material MakeLit(string path, string pipe, Texture2D albedo, Texture2D normal, Texture2D metallicSmooth,
@@ -200,7 +242,25 @@ namespace CalfAsset.EditorTools
         }
 
         // ------------------------------------------------------------------ model importer
-        static void ConfigureModel(string fbx, Dictionary<string, Material> mats)
+        [Serializable] class ManifestTake { public string name = ""; public bool cyclic = false; public bool root_motion = false; }
+        [Serializable] class Manifest { public ManifestTake[] takes = new ManifestTake[0]; }
+
+        static Dictionary<string, ManifestTake> LoadManifest(string dir)
+        {
+            var result = new Dictionary<string, ManifestTake>();
+            var json = AssetDatabase.LoadAssetAtPath<TextAsset>(dir + "/Calf_export_manifest.json");
+            if (json == null) return result;
+            try
+            {
+                var m = JsonUtility.FromJson<Manifest>(json.text);
+                if (m?.takes != null)
+                    foreach (var t in m.takes) if (!string.IsNullOrEmpty(t.name)) result[t.name] = t;
+            }
+            catch (ArgumentException e) { Debug.LogWarning($"[Calf] could not read Calf_export_manifest.json ({e.Message}); using the clip table"); }
+            return result;
+        }
+
+        static void ConfigureModel(string fbx, string dir, Dictionary<string, Material> mats)
         {
             var mi = (ModelImporter)AssetImporter.GetAtPath(fbx);
             mi.globalScale = 1f;
@@ -210,28 +270,40 @@ namespace CalfAsset.EditorTools
             mi.importLights = false;
             mi.importNormals = ModelImporterNormals.Import;
             mi.importTangents = ModelImporterTangents.Import;      // exported tangents = the normal-map bake basis (exact)
-            mi.optimizeBones = false;                              // "Strip Bones" off: Root (motion node) and Tail5 carry no weights
+            mi.optimizeBones = false;                              // "Strip Bones" off: Root (root-motion bone) and Tail5 carry no weights
             mi.animationType = ModelImporterAnimationType.Generic;
             mi.avatarSetup = ModelImporterAvatarSetup.CreateFromThisModel;
             mi.importAnimation = true;
             mi.animationCompression = ModelImporterAnimationCompression.Optimal;
+            // Animation tab > Motion > Root Motion Node = <None>. A motion node would override (and hide) the per-clip
+            // Root Transform settings below; root motion comes from the Avatar's root node instead.
+            mi.motionNodeName = "";
             mi.materialImportMode = ModelImporterMaterialImportMode.ImportViaMaterialDescription;
             foreach (var kv in mats)
                 mi.AddRemap(new AssetImporter.SourceAssetIdentifier(typeof(Material), kv.Key), kv.Value);
+            SetRootMotionBone(mi, RootBone);
             mi.SaveAndReimport();
 
-            // motion node = the "Root" bone (path relative to the model root)
             var model = AssetDatabase.LoadAssetAtPath<GameObject>(fbx);
-            var rootBone = model.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == "Root");
-            if (rootBone != null) mi.motionNodeName = AnimationUtility.CalculateTransformPath(rootBone, model.transform);
-            else Debug.LogWarning("[Calf] bone 'Root' not found; root motion node not set");
+            if (!model.GetComponentsInChildren<Transform>(true).Any(t => t.name == RootBone))
+                Debug.LogWarning($"[Calf] bone '{RootBone}' not found; set Rig > Root node by hand");
 
+            var manifest = LoadManifest(dir);
             var clips = new List<ModelImporterClipAnimation>();
             foreach (var c in mi.defaultClipAnimations)
             {
                 string name = CleanClipName(c.takeName);
                 c.name = name;
-                ClipSpec.TryGetValue(name, out var spec);
+                bool known = ClipSpec.TryGetValue(name, out var spec);
+                if (manifest.TryGetValue(name, out var take))
+                {
+                    if (known && (take.cyclic != spec.loop || take.root_motion != (spec.rm != RootMotion.None)))
+                        Debug.LogWarning($"[Calf] {name}: manifest says loop={take.cyclic} root_motion={take.root_motion}; using the manifest");
+                    spec.loop = take.cyclic;
+                    if (!take.root_motion) spec.rm = RootMotion.None;
+                    else if (!known || spec.rm == RootMotion.None) spec.rm = RootMotion.TranslateAndTurn;
+                }
+                else if (!known) Debug.LogWarning($"[Calf] take {name}: not in the clip table or the manifest; imported as an in-place one-shot");
                 c.loopTime = spec.loop;
                 c.loopPose = false;                 // clips are authored with an exact seam (first frame == last frame)
                 bool translates = spec.rm == RootMotion.Translate || spec.rm == RootMotion.TranslateAndTurn;
@@ -248,40 +320,74 @@ namespace CalfAsset.EditorTools
             mi.SaveAndReimport();
         }
 
+        // Rig tab > Root node: the Avatar's root-motion bone, to which the per-clip Root Transform settings apply.
+        // HumanDescription.m_RootMotionBoneName is internal, so set it through the serialized importer the way
+        // ModelImporterRigEditor does (it stores the bone NAME, not the path). Call after the C# property changes.
+        static void SetRootMotionBone(ModelImporter mi, string bone)
+        {
+            var so = new SerializedObject(mi);
+            var p = so.FindProperty("m_HumanDescription.m_RootMotionBoneName");
+            if (p == null) { Debug.LogWarning($"[Calf] could not set Rig > Root node; set it to '{bone}' by hand"); return; }
+            p.stringValue = bone;
+            so.ApplyModifiedPropertiesWithoutUndo();
+        }
+
         static AnimationClip Clip(string fbx, string name)
         {
             return AssetDatabase.LoadAllAssetsAtPath(fbx).OfType<AnimationClip>()
                 .FirstOrDefault(c => !c.name.StartsWith("__preview__") && c.name == name);
         }
 
+        // Root speed Unity measured on the imported clip: the blend-tree threshold, and a check of the root-motion setup
+        static float RootSpeed(AnimationClip c, float expected)
+        {
+            float v = c.averageSpeed.magnitude;
+            if (v < 0.05f)
+            {
+                Debug.LogWarning($"[Calf] {c.name}: no root motion in Unity ({v:F3} m/s); check Rig > Root node = {RootBone}. Threshold {expected} m/s");
+                return expected;
+            }
+            if (Mathf.Abs(v - expected) > 0.1f * expected)
+                Debug.LogWarning($"[Calf] {c.name}: root speed {v:F3} m/s in Unity, {expected} m/s in the export");
+            else Debug.Log($"[Calf] {c.name}: root speed {v:F3} m/s (export {expected} m/s)");
+            return v;
+        }
+
         // ------------------------------------------------------------------ animator controller
+        // Rebuild in place when the controller exists, so its GUID (and every prefab, scene or Animator Override
+        // Controller that references it) survives. Hand edits are replaced.
+        static AnimatorController LoadOrResetController(string path)
+        {
+            var ctrl = AssetDatabase.LoadAssetAtPath<AnimatorController>(path);
+            if (ctrl == null)
+            {
+                AssetDatabase.DeleteAsset(path);                 // something that is not a controller (no-op if nothing is there)
+                return AnimatorController.CreateAnimatorControllerAtPath(path);
+            }
+            ctrl.layers = new AnimatorControllerLayer[0];
+            ctrl.parameters = new AnimatorControllerParameter[0];
+            foreach (var o in AssetDatabase.LoadAllAssetsAtPath(path))
+                if (o != null && o != ctrl) UnityEngine.Object.DestroyImmediate(o, true);   // old state machines, states, transitions, blend trees
+            ctrl.AddLayer("Base Layer");
+            EditorUtility.SetDirty(ctrl);
+            return ctrl;
+        }
+
         static AnimatorController CreateController(string dir, string fbx)
         {
             string path = dir + "/Calf.controller";
-            AssetDatabase.DeleteAsset(path);
-            var ctrl = AnimatorController.CreateAnimatorControllerAtPath(path);
+            var ctrl = LoadOrResetController(path);
             ctrl.AddParameter("Speed", AnimatorControllerParameterType.Float);
             foreach (var b in new[] { "Graze", "Lie" }) ctrl.AddParameter(b, AnimatorControllerParameterType.Bool);
-            foreach (var t in new[] { "Eat", "Call", "HeadShake", "Leap", "TurnLeft", "TurnRight", "LookAround", "Die" })
+            foreach (var t in OneShots.Select(o => o.trigger).Concat(new[] { "Die" }))
                 ctrl.AddParameter(t, AnimatorControllerParameterType.Trigger);
-
             var sm = ctrl.layers[0].stateMachine;
-            var loco = ctrl.CreateBlendTreeInController("Locomotion", out BlendTree tree, 0);
-            tree.blendType = BlendTreeType.Simple1D;
-            tree.blendParameter = "Speed";
-            tree.useAutomaticThresholds = false;
-            foreach (var (clip, speed) in Locomotion)
-            {
-                var c = Clip(fbx, clip);
-                if (c) tree.AddChild(c, speed); else Debug.LogWarning($"[Calf] clip {clip} missing for locomotion");
-            }
-            sm.defaultState = loco;
 
-            AnimatorState State(string clip, Vector3 pos)
+            AnimatorState State(string clip, float x, float y, string tag = "")
             {
                 var c = Clip(fbx, clip);
                 if (!c) { Debug.LogWarning($"[Calf] clip {clip} missing"); return null; }
-                var s = sm.AddState(clip, pos); s.motion = c; return s;
+                var s = sm.AddState(clip, new Vector3(x, y)); s.motion = c; s.tag = tag; return s;
             }
             AnimatorStateTransition Go(AnimatorState a, AnimatorState b, float dur, bool exit, float exitTime = 1f)
             {
@@ -289,37 +395,76 @@ namespace CalfAsset.EditorTools
                 var t = a.AddTransition(b); t.duration = dur; t.hasExitTime = exit; if (exit) t.exitTime = exitTime; return t;
             }
 
-            // grazing: Start -> Loop (while Graze) -> End -> Locomotion
-            var gS = State("Graze_Start", new Vector3(300, 0)); var gL = State("Graze_Loop", new Vector3(550, 0)); var gE = State("Graze_End", new Vector3(800, 0));
-            Go(loco, gS, 0.2f, false)?.AddCondition(AnimatorConditionMode.If, 0, "Graze");
+            // Idle: its own state (see Locomotion above)
+            var idle = State("Idle", 250, 0, ReadyTag);
+            if (idle == null) { idle = sm.AddState("Idle", new Vector3(250, 0)); idle.tag = ReadyTag; }
+            sm.defaultState = idle;
+
+            // Locomotion: Speed (m/s) blend tree over the root-motion gaits
+            var tree = new BlendTree { name = "Locomotion", blendType = BlendTreeType.Simple1D, blendParameter = "Speed", useAutomaticThresholds = false };
+            AssetDatabase.AddObjectToAsset(tree, ctrl);
+            var loco = sm.AddState("Locomotion", new Vector3(250, 160));
+            loco.motion = tree; loco.tag = ReadyTag;
+            bool slow = Clip(fbx, "Walk_Slow_RM") != null;
+            foreach (var (clip, speed) in Locomotion)
+            {
+                if (clip == "Stand" && !slow) continue;           // Stand only pairs with the equally long Walk_Slow_RM
+                var c = Clip(fbx, clip);
+                if (c) tree.AddChild(c, speed == 0f ? 0f : RootSpeed(c, speed));
+                else if (clip != "Stand" && clip != "Walk_Slow_RM") Debug.LogWarning($"[Calf] clip {clip} missing for locomotion");
+            }
+            Go(idle, loco, 0.25f, false)?.AddCondition(AnimatorConditionMode.Greater, SpeedStart, "Speed");
+            Go(loco, idle, 0.25f, false)?.AddCondition(AnimatorConditionMode.Less, SpeedStop, "Speed");
+
+            var ready = new[] { idle, loco };
+            void Enter(AnimatorState s, float dur, AnimatorConditionMode mode, string param)
+            {
+                foreach (var r in ready) Go(r, s, dur, false)?.AddCondition(mode, 0, param);
+            }
+            // back at the end: to Locomotion if Speed says so (listed first, so it wins), else to Idle
+            void Leave(AnimatorState s, float dur, float exitTime)
+            {
+                Go(s, loco, dur, true, exitTime)?.AddCondition(AnimatorConditionMode.Greater, SpeedStart, "Speed");
+                Go(s, idle, dur, true, exitTime);
+            }
+            var standing = new List<AnimatorState> { idle, loco };   // states Death may start from
+
+            // grazing: Start -> Loop (while Graze) -> End
+            var gS = State("Graze_Start", 550, -300); var gL = State("Graze_Loop", 800, -300); var gE = State("Graze_End", 1050, -300);
+            Enter(gS, 0.2f, AnimatorConditionMode.If, "Graze");
             Go(gS, gL, 0.05f, true, 0.98f);
             Go(gL, gE, 0.1f, false)?.AddCondition(AnimatorConditionMode.IfNot, 0, "Graze");
-            Go(gE, loco, 0.2f, true, 0.95f);
+            Leave(gE, 0.2f, 0.95f);
+            standing.AddRange(new[] { gS, gL, gE });
 
-            // lying: LieDown -> Lying_Idle (while Lie) -> GetUp -> Locomotion
-            var lD = State("LieDown", new Vector3(300, 120)); var lI = State("Lying_Idle", new Vector3(550, 120)); var lU = State("GetUp", new Vector3(800, 120));
-            Go(loco, lD, 0.2f, false)?.AddCondition(AnimatorConditionMode.If, 0, "Lie");
+            // lying: LieDown -> Lying_Idle (while Lie) -> GetUp. No lying death clip: Die waits until the calf stands.
+            var lD = State("LieDown", 550, -180); var lI = State("Lying_Idle", 800, -180); var lU = State("GetUp", 1050, -180);
+            Enter(lD, 0.2f, AnimatorConditionMode.If, "Lie");
             Go(lD, lI, 0.05f, true, 0.98f);
             Go(lI, lU, 0.1f, false)?.AddCondition(AnimatorConditionMode.IfNot, 0, "Lie");
-            Go(lU, loco, 0.2f, true, 0.95f);
+            Leave(lU, 0.2f, 0.95f);
 
-            // one-shots from locomotion, back when finished
-            float y = 240;
-            foreach (var (clip, trig) in new[] { ("Eating", "Eat"), ("Call", "Call"), ("HeadShake", "HeadShake"), ("Leap", "Leap"),
-                                                ("TurnLeft90", "TurnLeft"), ("TurnRight90", "TurnRight"), ("Idle_LookAround", "LookAround") })
+            // one-shots. Turns leave only when the root yaw is complete (exit time 1): during a blend the leaving state's
+            // root motion is weighted out, so an early exit under-turns. They enter with a short blend for the same reason.
+            float y = -60;
+            foreach (var (clip, trig) in OneShots)
             {
-                var s = State(clip, new Vector3(300, y)); y += 60;
-                Go(loco, s, 0.2f, false)?.AddCondition(AnimatorConditionMode.If, 0, trig);
-                Go(s, loco, 0.2f, true, 0.95f);
+                var s = State(clip, 550, y += 60);
+                bool turn = clip.StartsWith("Turn");
+                Enter(s, turn ? 0.15f : 0.2f, AnimatorConditionMode.If, trig);
+                Leave(s, turn ? 0.15f : 0.2f, turn ? 1f : 0.95f);
+                if (clip != "Leap") standing.Add(s);              // no death in mid-air: Die waits for the landing
             }
 
-            // death from anywhere, no exit
-            var death = State("Death", new Vector3(550, 240));
+            // death from every standing state (the clip starts from the standing pose), checked before other transitions
+            var death = State("Death", 900, 200, DeadTag);
             if (death != null)
-            {
-                var t = sm.AddAnyStateTransition(death);
-                t.AddCondition(AnimatorConditionMode.If, 0, "Die"); t.duration = 0.15f; t.canTransitionToSelf = false;
-            }
+                foreach (var s in standing.Where(s => s != null))
+                {
+                    Go(s, death, 0.15f, false).AddCondition(AnimatorConditionMode.If, 0, "Die");
+                    s.transitions = s.transitions.OrderBy(t => t.destinationState == death ? 0 : 1).ToArray();
+                }
+            EditorUtility.SetDirty(ctrl);
             AssetDatabase.SaveAssets();
             return ctrl;
         }
@@ -330,20 +475,21 @@ namespace CalfAsset.EditorTools
             var model = AssetDatabase.LoadAssetAtPath<GameObject>(fbx);
             var inst = (GameObject)PrefabUtility.InstantiatePrefab(model);
             inst.name = "Calf";
-            var animator = inst.GetComponent<Animator>() ?? inst.AddComponent<Animator>();
+            var animator = inst.GetComponent<Animator>();
+            if (animator == null) animator = inst.AddComponent<Animator>();   // Unity null check (no ?? on UnityEngine.Object)
             animator.runtimeAnimatorController = ctrl;
             animator.applyRootMotion = true;
             animator.cullingMode = AnimatorCullingMode.CullUpdateTransforms;
 
-            if (inst.GetComponent<LODGroup>() == null)
-            {
-                var rs = inst.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-                Renderer[] Lod(int i) => rs.Where(r => r.name.EndsWith("_LOD" + i)).Cast<Renderer>().ToArray();
-                var lg = inst.AddComponent<LODGroup>();
-                lg.SetLODs(new[] { new LOD(0.35f, Lod(0)), new LOD(0.12f, Lod(1)), new LOD(0.02f, Lod(2)) });
-                lg.RecalculateBounds();
-            }
-            foreach (var smr in inst.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            // The importer usually creates the LODGroup from the _LOD0.._LOD2 names; apply the documented thresholds either way
+            var rs = inst.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            Renderer[] Lod(int i) => rs.Where(r => r.name.EndsWith("_LOD" + i)).Cast<Renderer>().ToArray();
+            var lg = inst.GetComponent<LODGroup>();
+            if (lg == null) lg = inst.AddComponent<LODGroup>();
+            lg.SetLODs(new[] { new LOD(0.35f, Lod(0)), new LOD(0.12f, Lod(1)), new LOD(0.02f, Lod(2)) });
+            lg.RecalculateBounds();
+            for (int i = 0; i < 3; i++) if (Lod(i).Length == 0) Debug.LogWarning($"[Calf] no renderer named *_LOD{i}");
+            foreach (var smr in rs)
                 smr.updateWhenOffscreen = false;
 
             string path = dir + "/Calf.prefab";

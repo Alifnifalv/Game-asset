@@ -18,9 +18,9 @@ Clips (30 fps; hooves planted unless a step is listed)
                                extends nose-forward, jaw opens f16-22, >= 85 % open f22-43 (0.7 s) with a slight
                                vibrato, closes by f50, ears back, tail lifts -> Pose().
 
-GRAZE pose (graze_pose): body pitch 1.8 deg nose-down + 6 mm lower, withers (Torso3) 7 deg down, neck 20/23/20 deg,
-head extended -32 deg (face ~83 deg nose-down), left fore 6 cm forward. Nose pad ~4 cm above the ground (Calf_LOD2
-skinning; 3.3-6.2 cm during bites/tears), ~40 cm ahead of the front hooves.
+GRAZE pose (graze_pose): body pitch 1.8 deg nose-down + 6 mm lower, withers (Torso3) 7 deg down, neck 22.7/26.2/23.2
+deg, head extended -36 deg (face ~83 deg nose-down), left fore 6 cm forward. Nose pad ~1 cm above the ground
+(Calf_LOD0; the bites dip it onto the grass), ~30 cm ahead of the front hooves (review A12a: was ~4 cm up).
 
 Shared constant poses (module level): stand_pose() (== Pose()) and graze_pose() (GRAZE). Every non-loop clip starts
 and ends EXACTLY at those (pose functions return them verbatim on the boundary frames; overlays are 0 there).
@@ -90,13 +90,13 @@ def bump(f, a, p, b):
 
 
 def flick(f, f0, up=3.0, down=9.0):
-    """quick ear/skin twitch: fast ease-out rise over `up` frames, slower settle over `down` frames"""
+    """quick ear/skin twitch: eased rise over `up` frames (no velocity jump at the start: the old ease-out rise made
+    the Graze_Loop tear jerk start at full speed in one frame, review A12b), slower settle over `down` frames"""
     t = f - f0
     if t <= 0 or t >= up + down:
         return 0.0
     if t < up:
-        u = t / up
-        return 1 - (1 - u) ** 2
+        return smooth(t / up)
     return 1.0 - smooth((t - up) / down)
 
 
@@ -207,7 +207,7 @@ def stand_pose():
     return Pose()
 
 
-# GRAZE: tuned so the nose pad is ~4 cm and the lowest lip/chin vertex ~3 cm above the ground (LOD2 skinning),
+# GRAZE: tuned so the nose pad is ~1 cm above the ground (LOD0 skinning) and reaches it in the bites,
 # the front end ~1.5 cm lower (body pitch + withers), carpi only slightly more flexed than at rest.
 GRAZE_FEET = {"LF": V(0.0, -0.06, 0.0)}           # left fore stepped forward 6 cm (Graze_Start/End step it)
 
@@ -217,12 +217,12 @@ def graze_pose():
     P.body_off = V(0.0, 0.0, -0.006)
     P.body_rot = V(1.8, 0.0, 0.0)                  # nose down 1.8 deg about the COG
     P.spine = {"Torso": (-0.6, 0.0, 0.0), "Torso3": (7.0, 0.0, 0.0)}   # withers follow the neck down
-    P.neck = [20.0, 23.0, 20.0]
+    P.neck = [22.7, 26.2, 23.2]                    # (was 20/23/20: the muzzle hung 3.8-6.6 cm above the grass, A12a)
     P.neck_yaw = [1.0, 1.5, 2.0]
-    P.head = V(-32.0, 3.0, 2.0)                    # head extends against the neck: face ~83 deg nose-down
+    P.head = V(-36.0, 3.0, 2.0)                    # head extends against the neck: face ~83 deg nose-down
     P.jaw = 0.0
     P.ears = {"L": V(-6.0, 14.0, -4.0), "R": V(-4.0, 12.0, -4.0)}      # relaxed, drooping out/back
-    P.tail = [(0.5, -1.0)] + [(0.8, 0.0)] * 6
+    P.tail = [(0.44, -1.0), (0.86, 0.0), (0.04, 0.0), (-0.47, 0.0), (0.04, 0.0), (0.2, -0.01), (0.15, -0.01)]   # (A10 axis)
     P.feet = {k: v.copy() for k, v in GRAZE_FEET.items()}
     return P
 
@@ -267,7 +267,7 @@ def idle_pose_fn():
         # tail: slow idle sway (2 cycles, faded to 0 at the seam) + a fly-swat swish f58-100
         add_tail_wave(P, 2.0 * (0.5 - 0.5 * math.cos(2 * math.pi * f / N)), 2.0 * f / N)
         sw = bump(f, 58, 70, 100)
-        add_tail_wave(P, 22.0 * sw, (f - 58) / 15.0, lift=4.0 * sw)
+        add_tail_wave(P, 18.0 * sw, (f - 58) / 15.0, lift=4.0 * sw)   # tip +-30 cm (A10: the tail swings now)
         return P
     return N, fn, stand_pose, stand_pose
 
@@ -365,7 +365,7 @@ def graze_loop_fn():
             k = flick(f, f0, 3, 9) * k0
             P.ears[side] = P.ears[side] + V(-24.0 * k, -10.0 * k, 12.0 * k)
         sw = bump(f, 50, 62, 92)
-        add_tail_wave(P, 22.0 * sw, (f - 50) / 14.0, lift=3.0 * sw)
+        add_tail_wave(P, 18.0 * sw, (f - 50) / 14.0, lift=3.0 * sw)   # tip +-30 cm (A10: the tail swings now)
         add_tail_wave(P, 1.5 * (0.5 - 0.5 * math.cos(2 * math.pi * f / N)), 1.0 * f / N)
         return P
     return N, fn, graze_pose, graze_pose

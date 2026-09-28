@@ -55,13 +55,13 @@ class Pose:
     root_yaw: float = 0.0                      # deg, + = turn left (CCW seen from above)
     body_off: Vector = field(default_factory=lambda: Vector((0, 0, 0)))   # COG offset in root frame (m)
     body_rot: Vector = field(default_factory=lambda: Vector((0, 0, 0)))   # (pitch + nose down, roll + right side down, yaw + left) deg
-    spine: dict = field(default_factory=dict)  # bone -> (pitch, yaw, roll) deg in the bone's rest frame axes (X lateral, Z up)
+    spine: dict = field(default_factory=dict)  # bone -> (pitch, yaw, roll) deg in the bone's rest frame axes (X lateral, Z up); roll + = LEFT side down (opposite of body_rot)
     neck: list = field(default_factory=lambda: [0.0, 0.0, 0.0])        # pitch per neck bone (+ = head lower)
     neck_yaw: list = field(default_factory=lambda: [0.0, 0.0, 0.0])    # yaw per neck bone (+ = left)
-    head: Vector = field(default_factory=lambda: Vector((0, 0, 0)))    # (pitch + down, yaw + left, roll) deg
+    head: Vector = field(default_factory=lambda: Vector((0, 0, 0)))    # (pitch + down, yaw + left, roll + = left ear down) deg
     jaw: float = 0.0                           # deg open
-    ears: dict = field(default_factory=lambda: {"L": Vector((0, 0, 0)), "R": Vector((0, 0, 0))})  # (fwd/back, up/down, twist) deg
-    tail: list = field(default_factory=lambda: [(0.0, 0.0)] * 7)       # (side deg + left, lift deg + up) per segment
+    ears: dict = field(default_factory=lambda: {"L": Vector((0, 0, 0)), "R": Vector((0, 0, 0))})  # (x + = tip forward, y + = tip down, z twist) deg
+    tail: list = field(default_factory=lambda: [(0.0, 0.0)] * 7)       # (side deg + = tip to the calf's RIGHT, lift deg + = tip back/up) per segment
     feet: dict = field(default_factory=dict)   # leg -> Vector world-space offset from rest (in ROOT frame) (m)
     feet_world: dict = field(default_factory=dict)   # leg -> absolute armature-space position (overrides `feet`)
     flex: dict = field(default_factory=dict)   # leg -> hoof flex deg (+ = toe back/up)
@@ -98,6 +98,8 @@ def blend_pose(a: Pose, b: Pose, t: float) -> Pose:
 
 
 class Calf:
+    POLE_MARGIN = 15.0      # deg: min angle between an IK pole and its foot target line (see pose_to_basis)
+
     def __init__(self, blend):
         bpy.ops.wm.open_mainfile(filepath=blend)
         self.sc = bpy.context.scene
@@ -121,6 +123,7 @@ class Calf:
         self.scap_pivot = {leg: self.rest_head(d["chain"][0]) + Vector((0, 0.05, 0.28))
                            for leg, d in LEGS.items() if leg.endswith("F")}
         self.chain_len = {leg: sum(self.bones[n].length for n in d["chain"]) for leg, d in LEGS.items()}
+        self.tail_axis = {n: X.cross(self.rest[n].to_3x3() @ Y).normalized() for n in TAIL}   # see pose_to_basis
         self.withers = self.rest["Torso3"].translation.z + 0.3
         # authoring speed: meshes don't need to deform while solving/baking
         self.meshes = [o for o in bpy.data.objects if o.type == "MESH" and o.parent == self.arm]
@@ -168,6 +171,40 @@ class Calf:
     def rest_head(self, n):
         return self.rest[n].translation.copy()
 
+    def hoof_toe(self, leg):
+        """rest armature-space toe tip on the sole of `leg` (front-most bottom hoof vertex of Calf_LOD0, cached;
+        falls back to the toe bone tail at sole height when the mesh is missing)"""
+        if not hasattr(self, "_hoof_toe"):
+            self._hoof_toe = {}
+            ob = bpy.data.objects.get("Calf_LOD0")
+            if ob is not None and "orig_part" in ob.data.attributes:
+                me = ob.data
+                part = [0] * len(me.polygons); me.attributes["orig_part"].data.foreach_get("value", part)
+                hv = {v for p in me.polygons if part[p.index] == 2 for v in p.vertices}
+                gi = {g.index: g.name for g in ob.vertex_groups}
+                for lg, d in LEGS.items():
+                    bones = (d["foot"], d["toe"])
+                    pts = [ob.matrix_world @ me.vertices[i].co for i in hv
+                           if sum(g.weight for g in me.vertices[i].groups if gi.get(g.group) in bones) >= 0.5]
+                    if pts:
+                        zmin = min(p.z for p in pts)
+                        bot = [p for p in pts if p.z < zmin + 0.004]
+                        ymin = min(p.y for p in bot)                   # the calf faces -Y: the toe is the front-most
+                        toe = [p for p in bot if p.y < ymin + 0.004]
+                        self._hoof_toe[lg] = sum(toe, Vector()) / len(toe)
+        if leg not in self._hoof_toe:
+            t = self.bones[LEGS[leg]["toe"]].tail_local.copy(); t.z = 0.0
+            self._hoof_toe[leg] = t
+        return self._hoof_toe[leg].copy()
+
+    def hoof_vector(self, leg, flex):
+        """fetlock -> toe tip for hoof flex `flex` (pose_to_basis turns the hoof bone by flex about the fetlock and
+        the toe bone by another 0.35 flex about its head), root frame"""
+        d = LEGS[leg]
+        h, t = self.rest_head(d["foot"]), self.rest_head(d["toe"])
+        R1 = Matrix.Rotation(math.radians(flex), 3, "X"); R2 = Matrix.Rotation(math.radians(1.35 * flex), 3, "X")
+        return R1 @ (t - h) + R2 @ (self.hoof_toe(leg) - t)
+
     # ---------------------------------------------------------------- pose -> basis
     def pose_to_basis(self, P: Pose):
         B = {}
@@ -196,7 +233,10 @@ class Calf:
             B[n] = q.to_matrix().to_4x4()
         for i, n in enumerate(TAIL):
             side, lift = P.tail[i]
-            B[n] = (self.rot_about(n, Z, side) @ self.rot_about(n, X, lift)).to_matrix().to_4x4()
+            # side swing about the axis perpendicular to both the body's lateral axis and the bone (rest): the old
+            # armature-Z axis only swung the near-horizontal Tail1-2; for the hanging Tail3-7 (rest direction
+            # ~(0, 0.06, -1)) it was a twist about the bone's own length, so the tail barely swung (review A10)
+            B[n] = (self.rot_about(n, self.tail_axis[n], side) @ self.rot_about(n, X, lift)).to_matrix().to_4x4()
         # feet targets (armature space) first: the leg tops aim at them
         foot_M = {}
         for leg, d in LEGS.items():
@@ -216,6 +256,10 @@ class Calf:
             """angle of v from straight down in the root frame's sagittal plane (+ = pointing forward/-Y)"""
             w = inv_root.to_3x3() @ v
             return math.atan2(-w.y, -w.z)
+        def sag_rest(v):
+            """the same for a rest-pose (armature = root frame at rest) vector: it must NOT be taken through the root
+            transform (it was: with a root yaw the leg tops were aimed off by up to 8 deg; TurnLeft90 f48 femur)"""
+            return math.atan2(-v.y, -v.z)
         for leg, d in LEGS.items():
             top = d["top"]
             m = Matrix.Identity(4)
@@ -226,7 +270,7 @@ class Calf:
                 if P.auto_top:
                     piv = (parent_M @ self.rest[top].inverted()) @ self.scap_pivot[leg]
                     foot = foot_M[leg].translation
-                    ang = sag_angle(foot - piv) - sag_angle(self.rest_head(d["foot"]) - self.scap_pivot[leg])
+                    ang = sag_angle(foot - piv) - sag_rest(self.rest_head(d["foot"]) - self.scap_pivot[leg])
                     R = Matrix.Translation(piv) @ Matrix.Rotation(-ang * P.top_gain["F"], 4, side_axis) @ Matrix.Translation(-piv)
                     m = (parent_M.inverted() @ R @ parent_M) @ m
             else:
@@ -234,7 +278,7 @@ class Calf:
                 if P.auto_top:
                     hip = (parent_M @ self.rest[top].inverted()) @ self.rest_head(top)
                     foot = foot_M[leg].translation
-                    ang = sag_angle(foot - hip) - sag_angle(self.rest_head(d["foot"]) - self.rest_head(top))
+                    ang = sag_angle(foot - hip) - sag_rest(self.rest_head(d["foot"]) - self.rest_head(top))
                     R = Matrix.Translation(hip) @ Matrix.Rotation(-ang * P.top_gain["H"], 4, side_axis) @ Matrix.Translation(-hip)
                     m = (parent_M.inverted() @ R @ parent_M) @ m
             if leg in P.top_rot:
@@ -242,6 +286,21 @@ class Calf:
                 m = m @ q_pyr(top, pt, yw, rl).to_matrix().to_4x4()
             B[top] = m
         pose = self.fk(B)
+        # IK pole guard: the pole helpers ride on Body, far in front of the legs. When a foot target swings forward
+        # to within a few degrees of the pole direction (seen from the chain root, in the body's sagittal plane) the
+        # IK bend plane degenerates and the knee flips (fore carpus hyperextends: Gallop RF f5-6, -65 deg). Rotate
+        # the pole forward about the chain root so it always stays POLE_MARGIN deg ahead of the target line. Frames
+        # with more margin (every clip except the gallop's late fore swing) are untouched.
+        fwd_b, down_b = -(bodyT.to_3x3() @ Y).normalized(), -(bodyT.to_3x3() @ Z).normalized()
+        def fwd_angle(v):
+            return math.degrees(math.atan2(v.dot(fwd_b), v.dot(down_b)))
+        for leg, d in LEGS.items():
+            pn = d["pole"]
+            root = pose[d["chain"][0]].translation
+            short = self.POLE_MARGIN - (fwd_angle(pose[pn].translation - root) - fwd_angle(foot_M[leg].translation - root))
+            if short > 0:
+                R = Matrix.Translation(root) @ Matrix.Rotation(-math.radians(short), 4, side_axis) @ Matrix.Translation(-root)
+                B[pn] = self.basis_for(pn, pose, R @ pose[pn])
         self._last_targets = {leg: foot_M[leg].translation.copy() for leg in LEGS}   # before clamping
         self._last_roots = {leg: pose[d["chain"][0]].translation.copy() for leg, d in LEGS.items()}
         for leg, d in LEGS.items():
@@ -532,20 +591,36 @@ def gait_pose_fn(calf: Calf, g: G.Gait, cycles=1, turn_deg=0.0, speed_scale=1.0)
         return pos + Matrix.Rotation(math.radians(yaw), 3, "Z") @ rest_feet[leg]
 
     T = g.frames
+    hoof0 = {leg: calf.hoof_vector(leg, 0.0) for leg in LEGS}
+
+    def pivot(leg, flex, t_frames):
+        """fetlock displacement that keeps the toe tip where it is while the hoof flexes by `flex`"""
+        return Matrix.Rotation(math.radians(root_at(t_frames)[1]), 3, "Z") @ (hoof0[leg] - calf.hoof_vector(leg, flex))
+
     def foot_world(leg, f):
-        """world fetlock position via the planner (planted = home at mid-stance of that step)"""
+        """world fetlock position via the planner (planted = home at mid-stance of that step). The heel roll-off at
+        the end of the stance pivots the hoof about its TOE TIP (it used to turn about the fetlock, which pushed the
+        toe 1-2 cm into the ground and scraped it backward on every step, review A9); the swing starts from that
+        rolled position and the flexed toe never goes below its rest height."""
         q_off = g.offsets[leg]
         # time (frames) since the current step's touch-down
         ph = ((f / T) - q_off) % 1.0
         td = f - ph * T                          # touch-down frame of the current/last step
+        flex_now = -G.foot_offset(g, leg, (q_off + ph) % 1.0)[2]
         if ph < g.duty:
-            return home(leg, td + g.duty * T / 2), 0.0, 0.0
+            p = home(leg, td + g.duty * T / 2)
+            if flex_now > 0.0:
+                p = p + pivot(leg, flex_now, f)
+            return p, 0.0, 0.0
         s = (ph - g.duty) / (1 - g.duty)
         a = home(leg, td + g.duty * T / 2)                  # lift-off position
         b = home(leg, td + T + g.duty * T / 2)              # next planted position
         _, dz, _ = G.foot_offset(g, leg, (q_off + ph) % 1.0)
         p = a.lerp(b, G.smoother(s))
         p.z += dz * (1.0 if speed_scale > 0.3 or turn_deg else 0.6)
+        flex_off = -G.foot_offset(g, leg, (q_off + g.duty * (1.0 - 1e-9)) % 1.0)[2]   # roll-off flex at lift-off
+        p = p + pivot(leg, flex_off, f) * (1.0 - G.smooth(s / 0.3))
+        p.z = max(p.z, a.z + hoof0[leg].z - calf.hoof_vector(leg, flex_now).z)
         return p, s, dz
 
     def fn(f):
@@ -556,7 +631,7 @@ def gait_pose_fn(calf: Calf, g: G.Gait, cycles=1, turn_deg=0.0, speed_scale=1.0)
         P.body_off = Vector((sway, 0, dz))
         P.body_rot = Vector((pitch, roll, 0))
         if g.spine_flex:
-            flex = g.spine_flex * math.sin(2 * math.pi * (p - 0.25))
+            flex = g.spine_flex * math.sin(2 * math.pi * (p - g.spine_phase))
             P.spine = {"Torso": (flex, 0, 0), "Torso2": (0.5 * flex, 0, 0)}
         neck_p, head_p = G.head_offset(g, p)
         P.neck = [neck_p * 0.3, neck_p * 0.35, neck_p * 0.35]
@@ -579,8 +654,17 @@ def gait_pose_fn(calf: Calf, g: G.Gait, cycles=1, turn_deg=0.0, speed_scale=1.0)
 
 
 def planted_fn_for(g: G.Gait):
+    """stance (incl. the heel roll-off, when the hoof pivots on its toe): the body-vault reach pass uses this"""
     def f(leg, fr):
         return G.leg_phase(g, leg, (fr % g.frames) / g.frames) < g.duty * 0.98
+    return f
+
+
+def flat_planted_fn_for(g: G.Gait):
+    """flat-footed stance only (before the heel roll-off: the fetlock itself must not move). For the slide QA: in the
+    roll-off the fetlock rises and moves over the fixed toe tip, which is not a slide."""
+    def f(leg, fr):
+        return G.leg_phase(g, leg, (fr % g.frames) / g.frames) < g.duty * 0.85
     return f
 
 

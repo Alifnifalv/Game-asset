@@ -8,7 +8,7 @@ the body it slides backward at the body speed) or in SWING (lifted, carried forw
 Everything here returns offsets relative to the rest pose, so the caller (tools/anim_lib.py)
 only adds them to rest positions / rotations of the rig.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 
 LEGS = ("LF", "RF", "LH", "RH")          # left/right fore, left/right hind
@@ -50,6 +50,8 @@ class Gait:
     shoulder_glide: float = 0.03 # scapula fore/aft glide (m) with the front leg swing
     femur_swing: float = 18.0    # hind femur rotation range (deg) following the hind foot
     spine_flex: float = 0.0      # gallop spine flexion (deg)
+    spine_phase: float = 0.25    # phase of zero spine flexion on the way to full flexion (sin(2pi(p - spine_phase)))
+    tail_phase: float = 0.0      # phase of the tail base's side swing
 
     @property
     def seconds(self):
@@ -77,16 +79,43 @@ TROT = Gait("Trot", frames=16, stride=1.25, duty=0.42,
             roll=1.0, sway=0.004, head_nod=2.5, head_nod_per_cycle=2, head_nod_phase=0.35,
             neck_carriage=0.0, tail_swing=3.0, tail_lift=6.0, shoulder_glide=0.035, femur_swing=22.0)
 
-GALLOP = Gait("Gallop", frames=14, stride=2.05, duty=0.30,
-              offsets={"LH": 0.00, "RH": 0.10, "LF": 0.42, "RF": 0.52},  # transverse gallop, right lead
-              lift={"LF": 0.19, "RF": 0.19, "LH": 0.16, "RH": 0.16},
-              hoof_flex={"LF": 100, "RF": 100, "LH": 80, "RH": 80},
-              bob=0.055, bob_per_cycle=1, bob_phase=0.30, pitch=6.0, pitch_phase=0.30,
-              roll=1.0, sway=0.0, head_nod=9.0, head_nod_per_cycle=1, head_nod_phase=0.75,
-              neck_carriage=-6.0, tail_swing=3.0, tail_lift=18.0, shoulder_glide=0.045,
-              femur_swing=30.0, spine_flex=5.0)
+def rephase(g: Gait, d: float) -> Gait:
+    """The same gait with normalized time 0 moved to its old phase d: every phase parameter shifted by -d, so the
+    baked clip is the old one started d * frames later (for the root-motion clip, re-anchored at the origin)."""
+    return replace(g, offsets={k: (v - d) % 1.0 for k, v in g.offsets.items()},
+                   bob_phase=(g.bob_phase - d) % 1.0, pitch_phase=(g.pitch_phase - d) % 1.0,
+                   head_nod_phase=(g.head_nod_phase - d) % 1.0, spine_phase=(g.spine_phase - d) % 1.0,
+                   tail_phase=(g.tail_phase - d) % 1.0)
 
-GAITS = {g.name: g for g in (WALK, TROT, GALLOP)}
+
+# Transverse gallop, right lead: footfalls LH 0, RH .10, LF .42, RF .52 (written relative to the LH touch-down)...
+GALLOP = rephase(Gait("Gallop", frames=14, stride=2.05, duty=0.30,
+                      offsets={"LH": 0.00, "RH": 0.10, "LF": 0.42, "RF": 0.52},
+                      lift={"LF": 0.19, "RF": 0.19, "LH": 0.16, "RH": 0.16},
+                      hoof_flex={"LF": 100, "RF": 100, "LH": 80, "RH": 80},
+                      bob=0.040, bob_per_cycle=1, bob_phase=0.30, pitch=3.0, pitch_phase=0.30,
+                      roll=1.0, sway=0.0, head_nod=10.0, head_nod_per_cycle=1, head_nod_phase=5 / 7,
+                      neck_carriage=-20.0, tail_swing=3.0, tail_lift=18.0, shoulder_glide=0.045,
+                      femur_swing=30.0, spine_flex=5.0),
+                 5 / 7)
+# ...then re-phased so that normalized time 0 is the old frame 10 (LH .286, RH .386, LF .706, RF .806). Unity's
+# locomotion blend tree mixes Trot_RM and Gallop_RM at the same normalized time; with this phase every hoof of the
+# gallop is within ~0.2 cycle of its trot footfall (was up to 0.47), which cut the simulated 50/50 blend's longest
+# hoof skate from 42 to ~10 cm (sweep of 28 shifts; review A1). Head carriage (review A11, GiM reference 10.1-10.6 s:
+# head held up): neck_carriage -6 -> -20, body bob 0.055 -> 0.040 m, pitch 6 -> 3 deg, head nod 9 -> 10 deg phased
+# (0.0 after the re-phase) to steady the head: head joint 0.73-1.00 m (standing 0.87), was 0.58-0.94 m.
+
+# Slow walk (Unity blend-tree child between Stand and Walk, review A4; its 1.2 s cycle is close to the GiM reference walk's
+# 41 frames): same lateral sequence as WALK (so the two blend in phase), shorter stride, higher duty, lower steps.
+WALK_SLOW = Gait("Walk_Slow", frames=36, stride=0.54, duty=0.68,
+                 offsets={"LH": 0.00, "LF": 0.25, "RH": 0.50, "RF": 0.75},
+                 lift={"LF": 0.060, "RF": 0.060, "LH": 0.050, "RH": 0.050},
+                 hoof_flex={"LF": 60, "RF": 60, "LH": 48, "RH": 48},
+                 bob=0.006, bob_per_cycle=2, bob_phase=0.10, pitch=0.5, pitch_phase=0.0,
+                 roll=1.4, sway=0.010, head_nod=3.5, head_nod_per_cycle=2, head_nod_phase=0.30,
+                 neck_carriage=4.0, tail_swing=3.0, shoulder_glide=0.022, femur_swing=12.0)
+
+GAITS = {g.name: g for g in (WALK_SLOW, WALK, TROT, GALLOP)}
 
 
 def leg_phase(g: Gait, leg: str, p: float) -> float:
@@ -158,7 +187,7 @@ def femur_angle(g: Gait, leg: str, p: float):
 def tail_offset(g: Gait, p: float, segment: int):
     """(side_deg, lift_deg) for tail segment 1..7: a travelling wave with lag toward the tip"""
     lag = 0.07 * segment
-    side = g.tail_swing * (0.4 + 0.15 * segment) * math.sin(2 * math.pi * (p - lag))
+    side = g.tail_swing * (0.4 + 0.15 * segment) * math.sin(2 * math.pi * (p - g.tail_phase - lag))
     lift = g.tail_lift * (1.0 - 0.1 * segment)
     return side, lift
 

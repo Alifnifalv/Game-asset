@@ -3,17 +3,23 @@
 Usage
   python3 tools/export_unity.py --in build/stage_d.blend --out-dir Unity/Calf [--tex-dir build/textures]
           [--actions Eating,Idle] [--keep-helpers] [--max-influences 4] [--weight-limit refit|truncate]
-          [--name Calf] [--no-glb] [--no-fbx] [--validate]
-  (dev)  python3 tools/export_unity.py --in build/stage_b_snapshot_v1.blend --out-dir build/export_test
+          [--fit-frames 0] [--glb-tex-res 2048] [--name Calf] [--no-glb] [--no-fbx] [--validate]
+  (optional full-resolution glTF)  ... --no-fbx --glb-tex-res 0 --name Calf_4K
+  (dev)  python3 tools/export_unity.py --in build/stage_d.blend --out-dir <scratch>/Calf --tex-dir build/textures
   then   python3 tools/validate_export.py --fbx <out>/Calf.fbx --glb <out>/Calf.glb --src <blend>
+  --out-dir Unity/Calf overwrites the git-tracked deliverable: use a scratch --out-dir for experiments.
 
 Writes into --out-dir
   Calf.fbx                  armature node "CalfRig" + skinned Calf_LOD0/1/2 (Unity auto-builds a LODGroup from the
                             _LOD<n> suffixes), one take per action named exactly like the action, no leaf bones,
                             tangents exported, meters, Y up, calf facing +Z, identity transforms on every node above
                             the Root bone (see "Axes" below).
-  Calf.glb                  glTF 2.0 binary: rig + Calf_LOD0 + one animation per action, textures embedded.
-  Textures/                 copy of every image in --tex-dir (the FBX references them relatively: Textures/<file>).
+  Calf.glb                  glTF 2.0 binary: rig + Calf_LOD0 + one animation per action, textures embedded, reduced
+                            to --glb-tex-res (2048) because glTF engines (glTFast) load PNG/JPEG uncompressed; materials
+                            single-sided (backface culling on in the session, doubleSided=false).
+  Textures/                 copy of every image in --tex-dir except the authoring-only T_Calf_Height (the FBX references
+                            them relatively: Textures/<file>). The images are copied as they are: nothing checks that
+                            they are 4096 (a --tex-res 2048 build ships 2K maps).
   Calf_export_manifest.json what was exported (bones, dropped helpers, takes and frame ranges, LOD triangle counts,
                             influence clean-up stats, textures, exporter options); read by validate_export.py.
 
@@ -40,12 +46,18 @@ What the tool does to the in-memory copy before exporting
     per vertex; plain truncation to the 4 strongest bones (what Unity's import does) moves some neck/shoulder
     vertices by >1 cm when the head goes down.  Default --weight-limit refit: for each vertex over the limit, every
     4-bone subset of its (8 strongest) influences gets the weights that best reproduce the original all-influence
-    deformation over <= --fit-frames poses sampled from all exported actions (least squares, sum = 1, >= 0, ridge
-    toward the truncated weights), and the subset with the smallest worst-pose error wins.  Max deviation from the
-    all-influence skin over every frame, LOD0: snapshot v1 (Eating/Idle) 12.97 mm truncated -> 2.37 mm refit;
-    stage D (10 clips incl. gallop) 40.8 -> 23.5 mm (99.9th percentile 22.3 -> 9.9 mm).  The residual sits on the
-    brisket midline, which the source weights split between both front legs; the real fix is to paint/limit those
-    weights at stage B.  --weight-limit truncate gives the plain behaviour.
+    deformation over the poses of the exported actions (--fit-frames 0 = every frame of every action; least squares,
+    sum = 1, >= 0, ridge toward the truncated weights).  The plain truncation is always a candidate, and vertices
+    still > --fit-refine-mm (3 mm) off get a minimax refinement (Lawson re-weighted least squares) on the best
+    subsets; the result with the smallest worst-frame error wins.  So the manifest's sampled_max_error_mm_* is the
+    true worst case over every exported frame, and the refit is never worse than truncation on any vertex.
+    Measured on the 21-clip stage D (1,525 frames, LOD0, worst vertex over all frames): truncation 40.2 mm, old
+    240-frame least-squares refit 50.1 mm, this refit 26.5 mm (99th percentile of the per-vertex worst 29.1 / 17.2 /
+    12.8 mm).  The residual sits on the brisket midline, which the source weights split between both front legs and
+    Neck2; the real fix is to paint/limit those weights at stage B (then this step is a no-op: a source that is
+    already within the limit is only normalised).  NOTE: the refit weights depend on the exported clip set, so adding
+    or changing a clip changes the Unity skin: always re-export and re-validate.  --weight-limit truncate gives the
+    plain behaviour.
   * Polygons with more than 4 corners (if any) are triangulated, because tangents can only be exported for tris
     and quads.  Quads are kept: the exported tangents are Blender's MikkTSpace tangents of the quad mesh, i.e. the
     exact basis the Cycles normal-map bake used (Unity: Tangents = Import).
@@ -200,8 +212,9 @@ def skin_samples(arm, actions, bone_names, max_frames):
     frames = [(act, f) for act in actions for f in range(int(act.frame_range[0]), int(act.frame_range[1]) + 1)]
     if not frames:
         return None
-    stride = max(1, int(math.ceil(len(frames) / float(max_frames))))
-    frames = frames[::stride]
+    if max_frames and max_frames > 0:       # 0 / None: every frame of every action
+        stride = max(1, int(math.ceil(len(frames) / float(max_frames))))
+        frames = frames[::stride]
     hidden = [(o, o.hide_viewport) for o in bpy.data.objects if o.type == "MESH"]
     for o, _ in hidden:
         o.hide_viewport = True          # pose sampling without evaluating the meshes
@@ -228,36 +241,79 @@ def skin_samples(arm, actions, bone_names, max_frames):
     return out
 
 
-def fit_four(p, S, w, max_inf, lam):
-    """Best <= max_inf bone subset + weights (sum 1, >= 0) reproducing the all-influence skinning of point p over the
-    sampled poses S (F, n, 3, 4):  min_u |A u - b|^2 + lam F |u - u0|^2,  u0 = truncated renormalised weights.
-    All subsets are solved at once (normal equations + sum-to-one KKT row); the subset with the smallest worst-pose
-    error wins."""
-    import itertools
+def _kkt_solve(G, c, u0, lam, F):
+    """min u^T G u - 2 c^T u + lam F |u - u0|^2  s.t. sum(u) = 1, then clip negatives (renormalise; fall back to u0).
+    Batched over the leading axis: G (m, k, k), c (m, k), u0 (m, k)."""
     import numpy as np
-    F, n = S.shape[0], S.shape[1]
-    X = np.einsum("fbij,j->bfi", S, np.r_[p, 1.0]).reshape(n, -1)      # (n, 3F) point moved by each bone
-    tgt = w @ X
-    G, c = X @ X.T, X @ tgt
-    subs = np.array(list(itertools.combinations(range(n), max_inf)))    # (m, k)
-    k = max_inf
-    u0 = w[subs] / w[subs].sum(1, keepdims=True)
-    Gs = G[subs[:, :, None], subs[:, None, :]]
-    K = np.zeros((len(subs), k + 1, k + 1))
-    K[:, :k, :k] = Gs + lam * F * np.eye(k)
+    m, k = u0.shape
+    K = np.zeros((m, k + 1, k + 1))
+    K[:, :k, :k] = G + lam * F * np.eye(k)
     K[:, :k, k] = 1.0
     K[:, k, :k] = 1.0
-    rhs = np.concatenate([c[subs] + lam * F * u0, np.ones((len(subs), 1))], 1)
+    rhs = np.concatenate([c + lam * F * u0, np.ones((m, 1))], 1)
     u = np.linalg.solve(K, rhs[..., None])[:, :k, 0]
     neg = (u < 0).any(1)
     if neg.any():
         un = np.clip(u[neg], 0.0, None)
         sm = un.sum(1, keepdims=True)
         u[neg] = np.where(sm > 0, un / np.maximum(sm, 1e-12), u0[neg])
+    return u
+
+
+def fit_four(p, S, w, max_inf, lam, refine_mm=3.0, refine_subsets=3, refine_iters=10):
+    """Best <= max_inf bone subset + weights (sum 1, >= 0) reproducing the all-influence skinning of point p over the
+    sampled poses S (F, n, 3, 4); the bones of `w` are sorted strongest first.
+      1. least squares for every subset at once:  min_u |A u - b|^2 + lam F |u - u0|^2,  u0 = truncated renormalised
+         weights (normal equations + sum-to-one KKT row);
+      2. the plain truncation (strongest bones, renormalised) is always a candidate, so the result is never worse
+         than what Unity's own 4-bone limit would do, on the sampled poses;
+      3. when the best worst-pose error is still > refine_mm, the `refine_subsets` best subsets (and the truncated one)
+         get a minimax refinement (Lawson's iteratively re-weighted least squares: poses with large errors gain
+         weight), because the least-squares optimum lets a few extreme poses (gallop reach, lying) carry the error.
+    Returns (worst-pose error of the result, subset indices, weights, worst-pose error of the plain truncation)."""
+    import itertools
+    import numpy as np
+    F, n = S.shape[0], S.shape[1]
+    k = max_inf
+    X3 = np.einsum("fbij,j->bfi", S, np.r_[p, 1.0])                     # (n, F, 3) point moved by each bone
+    X = X3.reshape(n, -1)
+    tgt = w @ X
+    G, c = X @ X.T, X @ tgt
+    subs = np.array(list(itertools.combinations(range(n), k)))          # (m, k); subs[0] = strongest k bones
+    u0 = w[subs] / w[subs].sum(1, keepdims=True)
+    u = _kkt_solve(G[subs[:, :, None], subs[:, None, :]], c[subs], u0, lam, F)
     res = np.einsum("mk,mkq->mq", u, X[subs]) - tgt                       # (m, 3F) residuals
     err = np.sqrt((res.reshape(len(subs), F, 3) ** 2).sum(2)).max(1)       # worst sampled pose per subset
+    tgt3 = tgt.reshape(F, 3)
+
+    def worst(uu, sub):
+        return np.sqrt(((np.einsum("k,kfi->fi", uu, X3[sub]) - tgt3) ** 2).sum(1))
+    e_tr = float(worst(u0[0], subs[0]).max())
     b = int(np.argmin(err))
-    return float(err[b]), list(subs[b]), u[b]
+    best = (float(err[b]), subs[b], u[b])
+    if e_tr <= best[0]:
+        best = (e_tr, subs[0], u0[0])
+    if best[0] > refine_mm / 1000.0:
+        cands = [int(i) for i in np.argsort(err)[:refine_subsets]]
+        if 0 not in cands:
+            cands.append(0)
+        for m in cands:
+            sub = subs[m]
+            Xs = X3[sub]                                                   # (k, F, 3)
+            uu = u[m] if err[m] <= e_tr or m != 0 else u0[0]
+            e = worst(uu, sub)
+            fw = np.ones(F)
+            for _ in range(refine_iters):
+                fw = fw * (e / max(float(e.max()), 1e-12)) + 1e-9
+                fw = fw / fw.mean()
+                s = np.sqrt(fw)
+                A = (Xs * s[None, :, None]).reshape(k, -1)
+                bb = (tgt3 * s[:, None]).reshape(-1)
+                uu = _kkt_solve((A @ A.T)[None], (A @ bb)[None], u0[m][None], lam, F)[0]
+                e = worst(uu, sub)
+                if float(e.max()) < best[0]:
+                    best = (float(e.max()), sub, uu)
+    return best[0], list(best[1]), best[2], e_tr
 
 
 _WEIGHT_CACHE = {}
@@ -292,17 +348,14 @@ def limit_weights(obj, arm, bone_names, max_inf, fit=None):
                 err_fit.append(ef)
                 keep = [(names.index(nm), w) for nm, w in keep]
             elif fit is not None and fit[0] is not None:
-                S, bidx, lam = fit
+                S, bidx, lam, refine_mm = fit
                 cand = keep[:8]                   # C(8,4) = 70 subsets at most
                 w = np.array([x[1] for x in cand]) / sum(x[1] for x in cand)
                 Sv = S[:, [bidx[names[gi]] for gi, _ in cand]]
                 p = np.array(to_arm @ v.co)
-                e, sub, u = fit_four(p, Sv, w, max_inf, lam)
-                ut = w[:max_inf] / w[:max_inf].sum()
-                A = np.einsum("fbij,j->fbi", Sv, np.r_[p, 1.0])
-                full = np.einsum("b,fbi->fi", w, A)
-                err_trunc.append(float(np.linalg.norm(np.einsum("b,fbi->fi", ut, A[:, :max_inf]) - full, axis=1).max()))
-                err_fit.append(float(np.linalg.norm(np.einsum("b,fbi->fi", u, A[:, sub]) - full, axis=1).max()))
+                e, sub, u, et = fit_four(p, Sv, w, max_inf, lam, refine_mm=refine_mm)
+                err_trunc.append(et)
+                err_fit.append(e)
                 keep = [(cand[k][0], float(u[i])) for i, k in enumerate(sub) if u[i] > 0.0]
                 _WEIGHT_CACHE[(obj.name, v.index)] = ([(names[gi], w) for gi, w in keep], err_trunc[-1], err_fit[-1])
             else:
@@ -325,8 +378,15 @@ def limit_weights(obj, arm, bone_names, max_inf, fit=None):
     for gi, vi, w in sets:
         vgs[gi].add([vi], w, "REPLACE")
     if err_fit:
-        st["sampled_max_error_mm_truncate"] = round(max(err_trunc) * 1000, 3)
-        st["sampled_max_error_mm_refit"] = round(max(err_fit) * 1000, 3)
+        # worst deviation from the all-influence (Blender) skin over the fitted poses (with --fit-frames 0: every
+        # frame of every exported clip, i.e. the true maximum for this clip set)
+        et, ef = np.array(err_trunc) * 1000, np.array(err_fit) * 1000
+        st["sampled_max_error_mm_truncate"] = round(float(et.max()), 3)
+        st["sampled_max_error_mm_refit"] = round(float(ef.max()), 3)
+        st["sampled_p99_vertex_error_mm_truncate"] = round(float(np.percentile(et, 99)), 3)
+        st["sampled_p99_vertex_error_mm_refit"] = round(float(np.percentile(ef, 99)), 3)
+        st["sampled_verts_over_10mm_truncate"] = int((et > 10).sum())
+        st["sampled_verts_over_10mm_refit"] = int((ef > 10).sum())
     return st
 
 
@@ -548,13 +608,27 @@ def prepare(a, blend):
     weight_stats = {}
     fit = None
     deform = [n for n in exported_bones if arm.data.bones[n].use_deform]
-    if a.weight_limit == "refit" and actions and _WEIGHT_CACHE:
-        fit = (None, None, a.fit_lambda)        # second pass: reuse the refit of the first pass
-    elif a.weight_limit == "refit" and actions:
+    total_frames = sum(int(act.frame_range[1]) - int(act.frame_range[0]) + 1 for act in actions)
+    dset = set(deform)
+
+    def over_limit(o):
+        ok = [g.name in dset for g in o.vertex_groups]
+        return any(sum(1 for g in v.groups if g.weight > 0.0 and ok[g.group]) > a.max_influences for v in o.data.vertices)
+    over = any(over_limit(o) for o in lods)
+    fit_info = {"method": a.weight_limit if over else "none (source already within the influence limit)",
+                "frames_total": total_frames, "actions": [act.name for act in actions]}
+    if a.weight_limit == "refit" and actions and over and _WEIGHT_CACHE:
+        fit = (None, None, a.fit_lambda, a.fit_refine_mm)        # second pass: reuse the refit of the first pass
+        fit_info.update(_WEIGHT_CACHE.get("_info", {}))
+    elif a.weight_limit == "refit" and actions and over:
         S = skin_samples(arm, actions, deform, a.fit_frames)
-        fit = (S, {n: j for j, n in enumerate(deform)}, a.fit_lambda) if S is not None else None
+        fit = (S, {n: j for j, n in enumerate(deform)}, a.fit_lambda, a.fit_refine_mm) if S is not None else None
+        fit_info["frames_fitted"] = int(S.shape[0]) if S is not None else 0
+        fit_info["note"] = ("the refit weights are fitted to the poses of the exported clips: adding or changing a clip "
+                            "changes the exported skin, so re-export and re-validate after any clip change")
+        _WEIGHT_CACHE["_info"] = {k: fit_info[k] for k in ("frames_fitted", "note")}
     for o in lods:
-        weight_stats[o.name] = limit_weights(o, arm, set(deform), a.max_influences, fit)
+        weight_stats[o.name] = limit_weights(o, arm, dset, a.max_influences, fit)
         weight_stats[o.name]["ngons_triangulated"] = triangulate_ngons(o)
     setup_nla(arm, actions)
     # material slots (0 body, 1 eye by convention; fall back to names)
@@ -580,7 +654,8 @@ def prepare(a, blend):
     sc.frame_set(park)
     reset_pose(arm)
     return {"scene": sc, "arm": arm, "lods": lods, "actions": actions, "dropped": dropped,
-            "bones": exported_bones, "non_deform_kept": non_deform_kept, "weights": weight_stats, "mats": mats}
+            "bones": exported_bones, "non_deform_kept": non_deform_kept, "weights": weight_stats, "mats": mats,
+            "weight_fit": fit_info}
 
 
 def select_only(objs):
@@ -589,9 +664,63 @@ def select_only(objs):
         o.select_set(o in objs)
 
 
+def downscale_images(mats, max_res, tmp_dir):
+    """GLB only: every material image whose longest side exceeds max_res is replaced (in this session) by a copy
+    reduced by a power of two (box filter = the image's own next mip; normal maps are re-normalised) written to
+    tmp_dir, so the glTF exporter embeds the smaller image.  Returns [(image, old size, new size)]."""
+    import numpy as np
+    out, seen = [], set()
+    for m in mats.values():
+        for n in material_images(m):
+            img = n.image
+            if img.name in seen or max(img.size) <= max_res:
+                continue
+            seen.add(img.name)
+            src = bpy.path.abspath(img.filepath)
+            k = 1
+            while max(img.size) // k > max_res:
+                k *= 2
+            w, h = img.size[0] // k, img.size[1] // k
+            dst = os.path.join(tmp_dir, os.path.basename(src) if src else bpy.path.clean_name(img.name) + ".png")
+            is_normal = "normal" in img.name.lower() or "normal" in os.path.basename(src).lower()
+            try:
+                from PIL import Image
+                im = Image.open(src)
+                im.load()
+                small = im.reduce(k)
+                if is_normal and small.mode in ("RGB", "RGBA"):
+                    arr = np.asarray(small).astype(np.float64)
+                    v = arr[..., :3] / 255.0 * 2.0 - 1.0
+                    v /= np.maximum(np.linalg.norm(v, axis=2, keepdims=True), 1e-6)
+                    arr[..., :3] = np.clip(np.round((v + 1.0) * 0.5 * 255.0), 0, 255)
+                    small = Image.fromarray(arr.astype(np.uint8), small.mode)
+                small.save(dst)
+            except Exception:                       # no Pillow / unreadable file / exotic mode: Blender's own scaler
+                cp = img.copy()
+                cp.scale(w, h)
+                cp.filepath_raw = dst
+                cp.file_format = "PNG"
+                cp.save()
+                bpy.data.images.remove(cp)
+            old = tuple(img.size)
+            img.filepath = dst
+            img.reload()
+            out.append((img.name, old, tuple(img.size)))
+    return out
+
+
 def export_glb(a, C, tex, out_tex, path):
+    import tempfile
     wired = wire_textures(C["mats"], tex) if tex else []
     retarget_images(C["mats"], tex, out_tex)
+    # closed meshes: backface culling on, so the glTF materials are written doubleSided=false (the source .blend has
+    # culling off, which glTF engines such as glTFast would honour by rendering both faces of the whole body)
+    for m in C["mats"].values():
+        m.use_backface_culling = True
+    tmp_dir = tempfile.mkdtemp(prefix="calf_glb_tex_")
+    C["glb_textures"] = downscale_images(C["mats"], a.glb_tex_res, tmp_dir) if a.glb_tex_res > 0 else []
+    for name, old, new in C["glb_textures"]:
+        log("GLB texture %s: %dx%d -> %dx%d" % (name, old[0], old[1], new[0], new[1]))
     arm, lod0 = C["arm"], C["lods"][0]
     mw = lod0.matrix_world.copy()
     lod0.parent = None              # skinned mesh node at the glTF scene root (parent transforms do not apply
@@ -609,6 +738,7 @@ def export_glb(a, C, tex, out_tex, path):
         export_reset_pose_bones=True, export_force_sampling=True, export_frame_step=1,
         export_anim_slide_to_zero=True, export_optimize_animation_size=True,
         export_optimize_animation_keep_anim_armature=True, export_bake_animation=False)
+    shutil.rmtree(tmp_dir, ignore_errors=True)
     return wired
 
 
@@ -666,7 +796,11 @@ def main(argv):
                     help="vertices over the influence limit: refit = least-squares refit of the best bone subset over "
                          "sampled animation poses (default); truncate = keep the strongest bones and renormalise "
                          "(what Unity's own 4-bone limit does)")
-    ap.add_argument("--fit-frames", type=int, default=240, help="max sampled frames (all actions) for the refit")
+    ap.add_argument("--fit-frames", type=int, default=0,
+                    help="max sampled frames (all actions) for the refit; 0 = every frame of every exported action "
+                         "(default: the fitted maximum is then the true maximum for this clip set)")
+    ap.add_argument("--fit-refine-mm", type=float, default=3.0,
+                    help="vertices whose best least-squares refit still deviates more than this get a minimax refinement")
     ap.add_argument("--fit-lambda", type=float, default=1e-4,
                     help="refit regularisation toward the truncated weights (per frame, m^2 per unit weight^2)")
     ap.add_argument("--take-mode", choices=("nla", "all_actions"), default="nla",
@@ -678,6 +812,11 @@ def main(argv):
                     help="keep the source material slot order (default: M_Calf_Body is moved to the last slot = last "
                          "Unity submesh, which the optional shell fur component Unity/Calf/Fur/CalfFur.cs relies on)")
     ap.add_argument("--validate", action="store_true", help="run tools/validate_export.py on the result")
+    ap.add_argument("--glb-tex-res", type=int, default=2048,
+                    help="GLB only: images larger than this (longest side) are embedded reduced by a power of two (glTF "
+                         "engines load PNG/JPEG uncompressed: three 4K maps are ~270 MB of VRAM per calf); 0 = embed the "
+                         "source resolution (e.g. a separate --no-fbx --name Calf_4K export). The FBX always references the "
+                         "full-resolution Textures/")
     ap.add_argument("--no-fbx", action="store_true")
     ap.add_argument("--no-glb", action="store_true")
     a = ap.parse_args(argv)
@@ -702,7 +841,10 @@ def main(argv):
         wired = export_glb(a, C, dict(tex), out_tex, glb_path)
         log("GLB written", glb_path, "(%.2f MB)" % (os.path.getsize(glb_path) / 1e6), "wired:", wired)
         manifest["files"][os.path.basename(glb_path)] = os.path.getsize(glb_path)
-        manifest["glb"] = {"objects": [C["arm"].name, C["lods"][0].name], "textures_wired": wired}
+        manifest["glb"] = {"objects": [C["arm"].name, C["lods"][0].name], "textures_wired": wired,
+                           "texture_max_res": a.glb_tex_res or "source",
+                           "textures_reduced": [{"image": n, "from": list(o), "to": list(t)} for n, o, t in C["glb_textures"]],
+                           "double_sided": False}
 
     C = prepare(a, blend)
     sc, arm = C["scene"], C["arm"]
@@ -720,6 +862,7 @@ def main(argv):
                           "materials": [s.material.name if s.material else None for s in o.material_slots]}
                  for o in C["lods"]},
         "weights": C["weights"],
+        "weight_fit": C["weight_fit"],
         "max_influences": a.max_influences,
         "takes": [{"name": act.name, "frame_start": act.frame_range[0], "frame_end": act.frame_range[1],
                    "frames": int(round(act.frame_range[1] - act.frame_range[0])) + 1,
