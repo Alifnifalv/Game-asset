@@ -256,3 +256,39 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
   - **Leap lead-fore hoof slap (known):** 117 → 50 → 0 mm/f at f22–25.
   - **Module docstring is stale:** it says Death 72 f with the hold f62–72, and Leap 42 f with a ~15 cm apex. The code has 70 f with the hold f60–70, and 40 f with a +9 cm apex.
   - **Death differs from the reference.** Death has no root motion (known), and its collapse is slow: 35 f to impact against about 12–15 f in the GiM reference, where the legs stay straight.
+
+### 2026-09-28: lying clip family reworked after its review (fixes e8bc810: 3 major + 2 minor)
+- **What:** `tools/clips/lying.py` was largely rewritten on the same framework (Hermite body/foot tracks, knee lock,
+  `solve_body`). The design, rig findings and QA are in `docs/anim_lying.md` (read it first when touching the family).
+  - Clips are now `LieDown` 150 f, `Lying_Idle` 150 f loop, `GetUp` 150 f, still with no root motion.
+  - `LYING` now stretches both fore legs forward (the GiM reference) and lies `LY_B` = 0.40 m behind the standing
+    body (was 0.20).
+  - Seams are still exact (0.000 mm / 0.000°).
+- **Key techniques** (all inside the module; anim_lib is untouched):
+  - `make_clip_ex` keys the IK poles per frame. A free fore leg's pole rotates with the leg (the carpus always flexes
+    anatomically, including a leg stretched forward); a kneeling leg's pole lies in its knee plane (the knee stays
+    exactly on its contact under body roll: drift 0.04 mm, was 7 mm); hind poles rotate with the stifle→fetlock line (no
+    hock flip).
+  - `leg_state` predicts the baked IK analytically (knee ≤0.03 mm, hock ≤1.2 mm error). Key poses are solved against
+    joint angles.
+  - Hoof pivots let a loaded hoof roll on its toe with zero contact slide.
+  - A C1 `reach_guard` keeps loaded fore legs off the library's 0.992 reach clamp.
+  - `fit_femur` keeps the hind joints in range.
+- **QA** (new `JOINT` line with limits, all OK):
+  - Loaded fore fetlock: −52 / −61° (LieDown / GetUp; limit −65; was −117 / −124).
+  - Standing carpus: 24 / 15° (sniff was 38–46).
+  - Stifle: ≤135.5° (was 163–166). Hock: ≥−146°.
+  - LYING fore cannons/hooves inside the skin (LOD1): 0% (was 56–64%).
+  - Thigh inside the trunk: 9% at LieDown f84 (was 41%) and 15% at GetUp f18 (was 49%).
+  - Chest decelerates into the knee contact with no rebound. Hind hooves are lifted, not dragged: LOD0 +0.2..+12 mm
+    while moving (was −7.6 mm).
+  - Planted slide ≤0.04 mm; pivot drift 0.00 mm; LOD2 body min z ≥ −0.8 cm; max bone accel 34 mm/f².
+- **Gotchas found:**
+  - `anim_lib.blend_pose` returns a Pose with `auto_top=True`; reset it in auto_top-off families.
+  - Every `Pose()` frame holds the fore hooves ~2 mm up (the reach clamp is below the rest reach); a loaded hoof
+    settles those 2 mm when the elbow comes closer, so let that happen gradually.
+- **Open:**
+  - The lying calf is 0.40 m behind its standing root (Unity collider offset while lying, or add root motion).
+  - GetUp's left-fore plant is the tightest joint (−61°).
+  - Hind swings lift only 1–2 cm (more lift over-folds the hock while the rump is down).
+  - Folded fore legs still hide their cannons during the transition frames.

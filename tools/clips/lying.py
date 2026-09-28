@@ -1,41 +1,54 @@
-"""Lying family: LieDown (120 f), Lying_Idle (150 f loop), GetUp (120 f). No root motion (Root stays at the origin).
+"""Lying family: LieDown (150 f), Lying_Idle (150 f loop), GetUp (150 f). No root motion (Root stays at the origin).
 
 python3 tools/clips/lying.py [--in build/stage_b.blend] [--out <scratch>/test.blend] [--scratch DIR]
                              [--render all|none|Clip,Clip] [--step 4]
-builds the clips on the rig, prints QA (anim_lib IK gap / planted hoof slide, locked-knee slide, mesh ground check
-on Calf_LOD2, acceleration pops, exact seams between the three clips and against a Pose() clip), saves the blend
-and renders root-tracking filmstrips + GIFs (tools/render_clip.py, left and three-quarter views).
+builds the clips on the rig, prints QA and saves the blend:
+  * anim_lib IK gap / planted fetlock slide, locked-knee slide, hoof-pivot (toe/heel contact) slide;
+  * JOINT: baked joint angles about the side axis (carpus, fore/hind fetlock, stifle, hock), with the limits below;
+  * GROUND: Calf_LOD2 mesh min z of body / hoof vertices (planted and swinging hooves);
+  * INSIDE: LOD1 ray-parity test of fore cannons/hooves inside the body skin in LYING;
+  * POP: bone-head acceleration spikes; SEAM: exact joins between the clips and against a make_clip(Pose()) frame.
+Renders root-tracking filmstrips + GIFs (tools/render_clip.py, left and three-quarter views) unless --render none.
 
-Biomechanics (cattle):
-  * lying down is FRONT end first: sniff the spot, the left fore flexes and the calf drops onto that carpus (front
-    knee), then onto the right; the hindquarters then sink down and back onto the RIGHT hip while the chest follows
-    the forearms back onto the sternum; the hind legs end folded to the calf's LEFT (left hind on top, cannon lying
-    forward beside the belly), as in the GiM reference 29.6-38.7 s.
-  * getting up is HIND end first: gather the hind legs under, lunge forward on the knees while the hind legs
-    straighten and lift the rump, then the left fore steps onto its hoof, then the right, weight shift, stand.
-  * the carpus bends so the cannon folds BACKWARD (the kneeling cannon lies on the ground behind the knee, hoof
-    flexed with the toe pointing back); the hock bends the other way (IK poles).
+Biomechanics (cattle)
+  * Lying down is FRONT end first. The calf sniffs the spot and rocks its weight back, fore legs braced forward. The
+    left fore rolls onto its toe, lifts and folds, and the chest drops onto that carpus (front knee); meanwhile the
+    loaded right fore rolls onto its toe. Then the right carpus goes down. The hindquarters sink down and back onto the
+    RIGHT hip: the hocks travel back and down to the ground (hooves planted) until the rump is down, then the hind
+    hooves are lifted into the lying spots. The chest follows the forearms back onto the sternum. Finally each fore
+    leg is stretched forward, as in the GiM reference (28-40 s: both fore legs forward, the right hoof under the chin).
+  * Getting up is HIND end first. The fore legs are folded back under onto the knees. The hind hooves are lifted and
+    gathered beside/behind the belly while the pelvis unrolls. The calf lunges forward on its knees while the hind legs
+    lift the rump; with the rump up each hind hoof steps forward under the hips. Then it rolls onto the right knee,
+    steps the left fore forward (toe first), pushes, steps the right fore (toe first), rises and stands.
+  * The carpus bends so the cannon folds BACKWARD (a kneeling cannon lies on the ground behind the knee, hoof flipped
+    toe-back); the hock bends the other way.
+  * Weight-bearing contacts never slide. Standing hooves are fixed at their toe (or heel) contact point: a loaded hoof
+    that has to tilt rolls about that point (`pivots`) instead of hyperextending the fetlock. Kneeling carpi stay on
+    fixed ground points (`knee_points`); the knee lock in `clip_fn` solves body height (+ roll for two knees) every frame
+    so each elbow stays a forearm length from its contact. `reach_guard` lowers the body if the keys ever ask a loaded
+    fore leg for more reach than it has (the library would clamp the foot target and lift/slide the hoof).
+  * The lying body lies LY_B = 0.40 m behind the standing one (no root motion): the knees land ~11 cm behind the
+    fore hooves, so a loaded fore hoof stays ahead of its elbow while the chest is low (lying down and stepping up).
 
-Weight-bearing contacts never slide: standing hooves are planted at their rest position (per-leg Hermite tracks
-with zero-tangent "stop" keys hold them exactly); kneeling carpi are kept on fixed ground points (`knee_points`) by
-the knee lock in `clip_fn`, which solves body height (+ roll for two knees) every frame so each elbow stays a
-forearm length from its contact.
+Rig handling that differs from anim_lib.Calf.make_clip (see make_clip_ex)
+  * The IK poles are keyed per frame (the PoleTarget bones are unweighted helpers, dropped at export). A free fore leg
+    keeps its pole anterior to the elbow->fetlock line (the rest offset rotated by the leg's sagittal swing), so the
+    carpus always flexes the anatomical way, also with the leg stretched forward (the Body-parented rest pole flips it).
+    A kneeling leg gets a pole in the plane (elbow, fetlock, knee contact): the knee lands exactly on its contact
+    whatever the body roll. Hind poles rotate with the stifle->fetlock line the same way (no hock flip when folded).
+  * `leg_state` predicts the baked IK analytically (same poles; knees within 0.03 mm, hocks within 1.2 mm of the
+    bake). Key poses are solved against it: knee contacts, loaded elbow distance, fore fetlock angle, hock height
+    (`solve_femur`) and hind joint limits (`fit_femur`).
 
-Rig facts learnt here (useful for other families):
-  * the front IK poles are children of Body and sit in front of / below the elbow: body ROLL tilts the front IK
-    planes and drags a kneeling carpus sideways, so the chest stays unrolled (roll 0) whenever a knee is locked and
-    the "on one hip" look is made with the Back bone (pelvis) roll + a Torso counter-roll;
-  * for the same reason a fore leg stretched forward can only bend its carpus DOWNWARD mid-transition, so LYING
-    keeps both fore legs folded (the reference stretches one out);
-  * spine roll sign is opposite to body_rot roll: spine roll + = LEFT side down;
-  * ears Vector(a, b, c): a + = forward / - = back, b + = droop down / - = up, c - = opening turns forward;
-  * the library clamps a foot target at 0.992 x chain, below the rest reach of the fore legs, so a Pose() clip is
-    9 mm / 3 deg away from the armature rest in the fore legs; every clip shares it, so chaining is exact.
+Joint limits used here (angle about the side axis; 0 = straight; the rest pose values in brackets)
+  fore fetlock >= -65 deg when loaded [-31]; carpus <= 25 deg on a loaded standing leg [15]; stifle bend <= 140 deg [60];
+  hock bend >= -150 deg [-52].
 """
 import copy, math, os, sys
 import numpy as np
 import bpy
-from mathutils import Vector
+from mathutils import Vector, Matrix
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)
@@ -45,8 +58,20 @@ from anim_lib import Pose, LEGS
 
 FRONT = ("LF", "RF")
 HIND = ("LH", "RH")
+X_AX = Vector((1, 0, 0))
 R_KNEE = 0.040          # carpus joint height when the knee rests on the ground (m)
 R_FETLOCK = 0.034       # fetlock joint height when the cannon lies on the ground (m)
+KNEEL_FLEX = 115.0      # hoof flex while the fore cannon lies on the ground behind the carpus (toe points back)
+HIP_ROLL = -14.0        # Back (pelvis) roll when lying: right hip down (spine roll + = LEFT side down)
+LY_B = 0.40             # the lying body lies this far back (+Y) of the standing body (knees land behind the hooves)
+# hoof sole contact points (rest armature space, attached to the toe bone): toe tip and heel bulb
+TOE_Y = {"F": -0.405, "H": 0.364}
+HEEL_Y = {"F": -0.352, "H": 0.424}
+SOLE_Z = 0.002
+FETLOCK_MIN = -65.0     # loaded fore fetlock dorsiflexion limit (deg)
+CARPUS_STAND_MAX = 25.0
+STIFLE_MAX = 140.0
+HOCK_MIN = -150.0       # hock bend limit (tibia/metatarsus at least 30 deg apart) [rest -52, LYING -144]
 
 
 # ============================================================================ small helpers
@@ -60,10 +85,6 @@ def fk(calf, P):
     return calf._last_pose
 
 
-def head(calf, P, bone):
-    return fk(calf, P)[bone].translation.copy()
-
-
 def rest_foot(calf, leg):
     return calf.rest_head(LEGS[leg]["foot"])
 
@@ -73,20 +94,40 @@ def set_foot(calf, P, leg, world):
     P.feet[leg] = Vector(world) - rest_foot(calf, leg)
 
 
+def foot_world(calf, P, leg):
+    return rest_foot(calf, leg) + P.feet.get(leg, Vector((0, 0, 0)))
+
+
+def L1(calf, leg):
+    return calf.bones[LEGS[leg]["chain"][0]].length
+
+
+def L2(calf, leg):
+    return calf.bones[LEGS[leg]["chain"][1]].length
+
+
+def elbow_name(leg):
+    return LEGS[leg]["chain"][0]
+
+
 _DOF = {"x": ("body_off", 0), "y": ("body_off", 1), "z": ("body_off", 2),
         "pitch": ("body_rot", 0), "roll": ("body_rot", 1), "yaw": ("body_rot", 2)}
 
 
 def _bump(P, dof, v):
+    if dof.startswith("femur:"):
+        leg = dof[6:]
+        P.femur = dict(P.femur); P.femur[leg] = P.femur.get(leg, 0.0) + v
+        return
     attr, i = _DOF[dof]
     vec = getattr(P, attr).copy(); vec[i] += v; setattr(P, attr, vec)
 
 
-def solve_body(calf, P, residual_fns, dofs, iters=12, tol=1e-5):
-    """Gauss-Newton on body DOFs so that every residual_fn(pose_matrices) -> 0."""
+def solve_body(calf, P, residual_fns, dofs, iters=14, tol=1e-5):
+    """Gauss-Newton on body DOFs (x y z pitch roll yaw, femur:<leg>) so that every residual_fn(P) -> 0.
+    Residuals take the pose (they call fk / leg_state themselves)."""
     def res(Q):
-        M = fk(calf, Q)
-        return np.array([f(M) for f in residual_fns])
+        return np.array([f(Q) for f in residual_fns])
     for _ in range(iters):
         r = res(P)
         if np.max(np.abs(r)) < tol:
@@ -102,17 +143,142 @@ def solve_body(calf, P, residual_fns, dofs, iters=12, tol=1e-5):
     return P
 
 
-def elbow_name(leg):
-    return LEGS[leg]["chain"][0]
+def sang(u, v, ax=X_AX):
+    """signed angle (deg) from u to v about axis ax (both projected on the plane normal to ax)"""
+    u = u - ax * u.dot(ax); v = v - ax * v.dot(ax)
+    return math.degrees(math.atan2(u.cross(v).dot(ax), u.dot(v)))
 
 
-def carpus_on_ground(calf, P, leg, K, back=True):
-    """fetlock target that puts the carpus of front `leg` at ground point K (cannon lying backward)."""
-    L2 = calf.bones[LEGS[leg]["chain"][1]].length
-    drop = K.z - R_FETLOCK
-    a = math.asin(max(-0.9, min(0.9, drop / L2)))
-    d = Vector((0, math.cos(a), -math.sin(a))) if back else Vector((0, -math.cos(a), -math.sin(a)))
-    set_foot(calf, P, leg, K + L2 * d)
+# ============================================================================ hooves
+def hoof_local(calf, leg, which):
+    """rest armature-space point of the hoof sole attached to the toe bone: 'toe' tip or 'heel' bulb"""
+    x = rest_foot(calf, leg).x
+    return Vector((x, (TOE_Y if which == "toe" else HEEL_Y)[leg[1]], SOLE_Z))
+
+
+def hoof_offset(calf, leg, flex, which):
+    """vector fetlock -> hoof point `which` for hoof flex `flex` (anim_lib: the pastern turns by flex, the toe bone
+    by another 0.35 flex, both about X; root yaw is 0 in this family)"""
+    h = rest_foot(calf, leg); t = calf.rest_head(LEGS[leg]["toe"])
+    R1 = Matrix.Rotation(math.radians(flex), 3, "X"); R2 = Matrix.Rotation(math.radians(1.35 * flex), 3, "X")
+    return R1 @ (t - h) + R2 @ (hoof_local(calf, leg, which) - t)
+
+
+def pivot_point(calf, leg, which="toe"):
+    """world position of the hoof contact point of a hoof standing at rest"""
+    return rest_foot(calf, leg) + hoof_offset(calf, leg, 0.0, which)
+
+
+def foot_on_pivot(calf, leg, point, flex, which="toe"):
+    """foot-track value (fetlock offset, flex) that puts hoof point `which` at world `point`"""
+    F = Vector(point) - hoof_offset(calf, leg, flex, which)
+    return (F - rest_foot(calf, leg), flex)
+
+
+# ============================================================================ IK poles + analytic leg solve
+def anterior_pole(calf, leg, E, F):
+    """front pole for a free leg: the rest pole offset rotated about the elbow by the leg's sagittal swing, so it stays
+    anterior to the elbow->fetlock line (the carpus flexes the anatomical way whatever the leg direction)"""
+    d = LEGS[leg]
+    e0 = calf.rest_head(d["chain"][0])
+    rel = calf.rest_head(d["pole"]) - e0
+    v = F - E; v0 = rest_foot(calf, leg) - e0
+    ang = math.atan2(-v.y, -v.z) - math.atan2(-v0.y, -v0.z)
+    return E + Matrix.Rotation(-ang, 3, "X") @ rel
+
+
+def hind_pole(calf, leg, S, F):
+    """hind pole: the rest pole offset rotated about the stifle by the sagittal swing of the stifle->fetlock line, so
+    the hock never flips when the leg folds forward (the Body-parented rest pole can end up behind the line)"""
+    d = LEGS[leg]
+    s0 = calf.rest_head(d["chain"][0])
+    rel = calf.rest_head(d["pole"]) - s0
+    v = F - S; v0 = rest_foot(calf, leg) - s0
+    ang = math.atan2(-v.y, -v.z) - math.atan2(-v0.y, -v0.z)
+    return S + Matrix.Rotation(-ang, 3, "X") @ rel
+
+
+def knee_pole(E, F, K):
+    """pole in the plane (elbow, fetlock, knee contact), on the knee's side"""
+    u = (F - E).normalized(); w = K - E; w = w - u * w.dot(u)
+    return K + w.normalized() * 0.5
+
+
+def front_pole(calf, P, leg, E, F):
+    pole = anterior_pole(calf, leg, E, F)
+    kn = getattr(P, "kneel", {}).get(leg)
+    if kn and kn[1] > 0:
+        pole = pole.lerp(knee_pole(E, F, kn[0]), kn[1])
+    return pole
+
+
+def two_bone(E, F, a_len, b_len, side_pt, toward=True):
+    v = F - E; d = max(1e-6, v.length); u = v / d
+    a = (a_len ** 2 - b_len ** 2 + d * d) / (2 * d); h = math.sqrt(max(0.0, a_len ** 2 - a * a))
+    w = side_pt - E; w = w - u * w.dot(u); w.normalize()
+    return E + u * a + (w if toward else -w) * h
+
+
+def leg_state(calf, P):
+    """Analytic prediction of the baked leg IK of pose P (same poles as make_clip_ex): per leg the joint positions
+    and the joint angles about the side axis (deg, 0 = straight): fore carpus/fetlock, hind stifle/hock/fetlock."""
+    calf.pose_to_basis(P)
+    M = calf._last_pose; feet = calf._last_feet
+    out = {}
+    for leg, d in LEGS.items():
+        F = feet[leg].copy()
+        fl = P.flex.get(leg, 0.0)
+        pastern = Matrix.Rotation(math.radians(fl), 3, "X") @ (calf.rest[d["foot"]].to_3x3() @ Vector((0, 1, 0)))
+        toe = F + hoof_offset(calf, leg, fl, "toe"); heel = F + hoof_offset(calf, leg, fl, "heel")
+        if leg in FRONT:
+            E = M[d["chain"][0]].translation.copy()
+            K = two_bone(E, F, L1(calf, leg), L2(calf, leg), front_pole(calf, P, leg, E, F), True)
+            out[leg] = dict(E=E, K=K, F=F, toe=toe, heel=heel, carpus=sang(K - E, F - K), fetlock=sang(F - K, pastern),
+                            reach=(F - E).length / calf.chain_len[leg])
+        else:
+            hip = M[d["top"]].translation.copy(); S = M[d["chain"][0]].translation.copy()
+            H = two_bone(S, F, L1(calf, leg), L2(calf, leg), hind_pole(calf, leg, S, F), False)
+            out[leg] = dict(hip=hip, S=S, H=H, F=F, toe=toe, heel=heel, stifle=sang(S - hip, H - S),
+                            hock=sang(H - S, F - H), fetlock=sang(F - H, pastern), reach=(F - S).length / calf.chain_len[leg])
+    out["M"] = M
+    return out
+
+
+def solve_femur(calf, P, leg, hock_z, iters=12):
+    """femur swing (P.femur[leg]) that puts the hind hock at height hock_z (the hock travels on the circle around the
+    fetlock; more femur = stifle forward = hock lower)"""
+    P.femur = dict(P.femur); P.femur.setdefault(leg, 0.0)
+    for _ in range(iters):
+        z0 = leg_state(calf, P)[leg]["H"].z - hock_z
+        if abs(z0) < 1e-5:
+            break
+        P.femur[leg] += 0.2
+        z1 = leg_state(calf, P)[leg]["H"].z - hock_z
+        P.femur[leg] -= 0.2
+        if abs(z1 - z0) < 1e-9:
+            break
+        P.femur[leg] -= max(-15.0, min(15.0, z0 * 0.2 / (z1 - z0)))
+    return P
+
+
+def fit_femur(calf, P, leg, hock_min=HOCK_MIN + 4.0, stifle_max=STIFLE_MAX - 4.0, hock_z=0.03, span=40.0):
+    """smallest change of the femur swing that keeps the hind leg inside its joint limits (hock bend >= hock_min,
+    stifle bend <= stifle_max) with the hock at least hock_z above the ground; scans +-span deg in 0.5 deg steps"""
+    P.femur = dict(P.femur); f0 = P.femur.get(leg, 0.0)
+    best = None
+    for k in range(int(2 * span) + 1):
+        for sg in ((1,) if k == 0 else (1, -1)):
+            P.femur[leg] = f0 + sg * 0.5 * k
+            st = leg_state(calf, P)[leg]
+            if st["hock"] >= hock_min and st["stifle"] <= stifle_max and st["H"].z >= hock_z:
+                best = P.femur[leg]
+                break
+        if best is not None:
+            break
+    if best is None:
+        print(f"  fit_femur {leg}: no femur swing within +-{span:.0f} deg meets the hind joint limits (kept {f0:.1f})")
+    P.femur[leg] = f0 if best is None else best
+    return P
 
 
 # ============================================================================ interpolation
@@ -156,25 +322,85 @@ def foot_of(P, leg):
     return (P.feet.get(leg, Vector((0, 0, 0))).copy(), P.flex.get(leg, 0.0))
 
 
+def lifted(a, b, t=0.5, lift=0.03, flex=None):
+    """foot-track value between a and b (fraction t), raised by `lift` (swing keys: no dragging along the ground)"""
+    v = (a[0].lerp(b[0], t) + Vector((0, 0, lift)), a[1] + (b[1] - a[1]) * t if flex is None else flex)
+    return v
+
+
 def in_plan(plan, leg, f):
     return any(a <= f <= b for a, b in plan.get(leg, ()))
 
 
-def clip_fn(calf, body_keys, foot_keys, lock, overlays=()):
+POLE_RAMP = 4           # frames over which the pole blends between the free and the kneeling rule
+
+
+def lock_weight(lock, leg, f):
+    w = 0.0
+    for a, b in lock.get(leg, ()):
+        if a <= f <= b:
+            return 1.0
+        if a - POLE_RAMP < f < a:
+            w = max(w, A.ease((f - (a - POLE_RAMP)) / POLE_RAMP))
+        if b < f < b + POLE_RAMP:
+            w = max(w, A.ease(1 - (f - b) / POLE_RAMP))
+    return w
+
+
+def reach_guard(calf, P, legs, cap=0.0):
+    """Loaded fore legs must not be asked for more reach than they have at rest (anim_lib would clamp the target
+    toward the elbow and the planted hoof would lift/slide). Where the keyed elbow-fetlock distance d exceeds the
+    cap D0, lower the body (z; + roll for two legs) to a C1 soft limit: d' = d - (d - D0)^2 / (4 w) for
+    d < D0 + 2 w, else D0 + w. D0 = lerp(rest distance, D_STAND x chain, cap): at cap 0 standing frames at rest
+    are unchanged; at cap 1 a loaded hoof stays below the library's 0.992 x chain clamp (it rests on its real
+    contact point instead of being held ~2 mm up by the clamp, as it is in Pose())."""
+    over = {}
+    for leg in legs:
+        d = (fk(calf, P)[elbow_name(leg)].translation - foot_world(calf, P, leg)).length
+        D0 = A.lerp(_rest_reach(calf, leg), D_STAND * calf.chain_len[leg], cap); w = 0.0005 * calf.chain_len[leg]
+        if d > D0 + 1e-7:
+            over[leg] = d - (d - D0) ** 2 / (4 * w) if d < D0 + 2 * w else D0 + w
+    if over:
+        res = [(lambda Q, leg=leg, t=t: (fk(calf, Q)[elbow_name(leg)].translation - foot_world(calf, Q, leg)).length - t)
+               for leg, t in over.items()]
+        solve_body(calf, P, res, ["z"] if len(res) == 1 else ["z", "roll"])
+    return P
+
+
+def _rest_reach(calf, leg):
+    key = ("reach", id(calf), leg)
+    if key not in _CACHE:
+        _CACHE[key] = (calf.rest_head(elbow_name(leg)) - rest_foot(calf, leg)).length
+    return _CACHE[key]
+
+
+def clip_fn(calf, body_keys, foot_keys, lock, pivots=None, overlays=(), planted=None, guard_cap=None):
     """pose function of a clip: whole-pose Hermite keys for body/head/tail, independent Hermite tracks per foot
-    (so planted feet hold exactly while the body moves), overlays, then the knee lock: while front `leg` is in a
-    lock interval its carpus is held on the shared ground contact (fetlock target from the contact; body z, plus
-    roll when both knees are down, solved so each elbow stays a forearm length from its contact). Keys at lock
-    start/end frames are built to satisfy the lock already, so it switches on/off without a pop."""
+    (so planted feet hold exactly while the body moves), hoof pivots (within [a, b] the fetlock follows from a fixed
+    toe/heel contact and the track's flex), overlays, then the knee lock: while front `leg` is in a lock interval its
+    carpus is held on the shared ground contact (fetlock target from the contact; body z, plus roll when both knees
+    are down, solved so each elbow stays a forearm length from its contact). Keys at lock start/end frames satisfy
+    the lock already, so it switches on/off without a pop."""
     body = hermite(body_keys, A.pose_combine)
     feet = {leg: hermite(k, _foot_combine) for leg, k in foot_keys.items()}
+    pivots = pivots or {}
+    planted = planted or {}
 
     def fn(f):
         P = body(f)
         for leg, tr in feet.items():
             P.feet[leg], P.flex[leg] = tr(f)
+        for leg, ivs in pivots.items():
+            for a, b, which, pt, *_ in ivs:
+                if a <= f <= b:
+                    P.feet[leg] = foot_on_pivot(calf, leg, pt, P.flex[leg], which)[0]
         for ov in overlays:
             P = ov(f, P)
+        loaded = [leg for leg in FRONT if in_plan(planted, leg, f) or
+                  any(iv[0] <= f <= iv[1] and (len(iv) < 5 or iv[4]) for iv in pivots.get(leg, ()))]
+        if loaded and not any(in_plan(lock, leg, f) for leg in FRONT):
+            reach_guard(calf, P, loaded, guard_cap(f) if guard_cap else 0.0)
+        P.kneel = {leg: (knee_points(calf)[leg], lock_weight(lock, leg, f)) for leg in FRONT if lock_weight(lock, leg, f) > 0}
         legs = [leg for leg in FRONT if in_plan(lock, leg, f)]
         if legs:
             solve_body(calf, P, [knee_res(calf, leg) for leg in legs], ["z"] if len(legs) == 1 else ["z", "roll"])
@@ -182,6 +408,89 @@ def clip_fn(calf, body_keys, foot_keys, lock, overlays=()):
                 kneel_leg(calf, P, leg)
         return P
     return fn
+
+
+# ============================================================================ clip writer (anim_lib make_clip + poles)
+def make_clip_ex(calf, name, frames, pose_fn, loop=False):
+    """anim_lib.Calf.make_clip (no reach pass) that also keys the PoleTarget bones (front_pole / hind_pole) before
+    the IK bake. At Pose() the poles land on their rest position, so standing frames equal a make_clip(Pose()) frame."""
+    act = calf.new_action(name)
+    poses = [pose_fn(f) for f in range(frames + 1)]
+    chain_bones = [n for d in LEGS.values() for n in d["chain"]]
+    for pb in calf.arm.pose.bones:
+        pb.matrix_basis = Matrix.Identity(4)
+    samples = {n: [] for n in calf.order if n not in chain_bones}
+    for P in poses:
+        B = calf.pose_to_basis(P)
+        M = calf._last_pose
+        for leg, d in LEGS.items():
+            if leg in FRONT:
+                pos = front_pole(calf, P, leg, M[d["chain"][0]].translation, calf._last_feet[leg])
+            else:
+                pos = hind_pole(calf, leg, M[d["chain"][0]].translation, calf._last_feet[leg])
+            B[d["pole"]] = calf.basis_for(d["pole"], M, Matrix.Translation(pos) @ calf.rest[d["pole"]].to_3x3().to_4x4())
+        for n in samples:
+            loc, rot, _ = B.get(n, Matrix.Identity(4)).decompose()
+            samples[n].append((loc, rot))
+    calf.write_curves(act, samples)
+    calf.use_action(act)
+    calf.add_ik()
+    calf.use_action(act)
+    baked = {n: [] for n in chain_bones}
+    for f in range(frames + 1):
+        calf.sc.frame_set(f)
+        ae = calf.arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        for n in chain_bones:
+            par = ae.pose.bones[calf.par[n]].matrix
+            local = (par @ calf.rel(n)).inverted() @ ae.pose.bones[n].matrix
+            baked[n].append((Vector((0, 0, 0)), local.to_quaternion()))
+    calf.remove_ik()
+    calf.write_curves(act, baked)
+    act.use_frame_range = True
+    act.frame_start, act.frame_end = 0, frames
+    act.use_cyclic = loop
+    return act
+
+
+# ============================================================================ residuals (key-pose solving)
+def knee_res(calf, leg):
+    K = knee_points(calf)[leg]; l1 = L1(calf, leg); n = elbow_name(leg)
+    return lambda P: (fk(calf, P)[n].translation - K).length - l1
+
+
+def elbow_ahead_res(calf, leg, dy):
+    """elbow `dy` behind (+) the knee contact"""
+    K = knee_points(calf)[leg]; n = elbow_name(leg)
+    return lambda P: fk(calf, P)[n].translation.y - (K.y + dy)
+
+
+def hip_z_res(calf, z):
+    return lambda P: (lambda M: 0.5 * (M["BackLeg.L"].translation.z + M["BackLeg.R"].translation.z) - z)(fk(calf, P))
+
+
+def shell_res(calf, leg, reach):
+    """loaded fore leg: elbow at `reach` x chain length from its planted fetlock (carpus stays near its rest bend)"""
+    n = elbow_name(leg)
+    return lambda P: (fk(calf, P)[n].translation - foot_world(calf, P, leg)).length - reach * calf.chain_len[leg]
+
+
+def fetlock_res(calf, leg, deg):
+    return lambda P: (leg_state(calf, P)[leg]["fetlock"] - deg) / 100.0
+
+
+def solve_flex_on_pivot(calf, P, leg, point, fetlock_deg, which="toe", lo=0.0, hi=100.0):
+    """hoof flex (rolling about its toe/heel contact `point`) that gives the loaded fore fetlock angle `fetlock_deg`"""
+    def g(fl):
+        P.feet[leg], P.flex[leg] = foot_on_pivot(calf, leg, point, fl, which)
+        return leg_state(calf, P)[leg]["fetlock"] - fetlock_deg
+    if g(lo) >= 0:          # already within the limit with the hoof at `lo`
+        return P
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        if g(mid) < 0: lo = mid
+        else: hi = mid
+    g(0.5 * (lo + hi))
+    return P
 
 
 # ============================================================================ shared constant poses
@@ -193,260 +502,347 @@ def stand():
 
 
 LYING_TAIL = ((0.0, -8.0), (0.0, -5.0), (0.0, 0.0), (0.0, 5.0), (6.0, 10.0), (12.0, 25.0), (14.0, 30.0))
-KNEEL_FLEX = 115.0      # hoof flex while the cannon lies on the ground behind the carpus (toe points back)
-HIP_ROLL = -14.0        # Back (pelvis) roll when lying: right hip down (spine roll + = LEFT side down)
-_KNEES = {}
+D_STAND = 0.990         # loaded standing fore leg: elbow-fetlock distance / chain length (rest 0.996, library clamp 0.992)
+EXT_REACH = 0.982       # fore leg stretched forward while lying (carpus ~20 deg, knee slightly up)
+EXT_FLEX = -48.0        # its hoof points forward, sole facing forward/down
+LY_FEET = {"LH": (0.26, 0.53), "RH": (0.00, 0.53)}     # lying hind fetlocks (x, y); the left hind lies on top
+_CACHE = {}
 
 
-def L1(calf, leg):
-    return calf.bones[LEGS[leg]["chain"][0]].length
-
-
-def _lying_base(calf):
-    """LYING body, head, tail and hind legs (front legs are added by the callers). The chest stays upright on
-    the sternum (body roll 0 keeps the front-leg IK planes vertical, so kneeling carpi stay put); only the
-    pelvis rolls onto the right hip."""
+def _lying_body(calf):
+    """LYING body, head, tail and hind legs (the fore legs are added by the callers): sternal recumbency, the chest
+    upright on the sternum, the pelvis rolled onto the right hip, hind legs folded to the left (left hind on top)."""
     P = stand()
     P.body_rot = Vector((-2.0, 0.0, 0.0))
-    P.body_off = Vector((0.0, 0.20, -0.43))
+    P.body_off = Vector((0.0, LY_B, -0.43))
     P.spine = {"Back": (0.0, 0.0, HIP_ROLL), "Torso": (0.0, 0.0, -HIP_ROLL)}
     P.neck = [2.0, 3.0, 2.0]
     P.neck_yaw = [3.0, 3.0, 2.0]
     P.head = Vector((4.0, 3.0, -5.0))
     P.ears = {"L": Vector((-10.0, 12.0, 0.0)), "R": Vector((-10.0, 12.0, 0.0))}
     P.tail = list(LYING_TAIL)
-    # hind legs folded to the left: femur flexed forward, hock on the ground behind, cannon lying forward
-    P.femur = {"LH": 55.0, "RH": 60.0}
-    set_foot(calf, P, "LH", (0.26, 0.33, R_FETLOCK))
-    set_foot(calf, P, "RH", (0.00, 0.33, R_FETLOCK))
-    P.flex["LH"] = -60.0
-    P.flex["RH"] = -60.0
+    P.femur = {"LH": 55.0, "RH": 57.0}
+    for leg, (x, y) in LY_FEET.items():
+        set_foot(calf, P, leg, (x, y, R_FETLOCK + 0.005))     # hoof resting on its dorsal wall at z ~ 0
+        P.flex[leg] = -60.0
     return P
 
 
 def knee_points(calf):
-    """Carpus ground contacts shared by every kneeling and lying frame of the family. Derived from the lying
-    body: the carpus lies a forearm length ahead of the elbow (forearm folded forward on the ground)."""
-    if id(calf) not in _KNEES:
-        M = fk(calf, _lying_base(calf))
+    """Carpus ground contacts shared by every kneeling frame of the family. Derived from the lying body: the carpus
+    lies a forearm length ahead of the elbow (forearm folded forward on the ground)."""
+    key = ("knees", id(calf))
+    if key not in _CACHE:
+        M = fk(calf, _lying_body(calf))
         K = {}
         for leg in FRONT:
             E = M[elbow_name(leg)].translation
             dz = E.z - R_KNEE
             K[leg] = Vector((E.x, E.y - math.sqrt(L1(calf, leg) ** 2 - dz * dz), R_KNEE))
-        _KNEES[id(calf)] = K
-    return _KNEES[id(calf)]
+        _CACHE[key] = K
+    return _CACHE[key]
+
+
+def carpus_on_ground(calf, P, leg, K):
+    """fetlock target that puts the carpus of front `leg` at ground point K (cannon lying backward)."""
+    l2 = L2(calf, leg)
+    a = math.asin(max(-0.9, min(0.9, (K.z - R_FETLOCK) / l2)))
+    set_foot(calf, P, leg, K + l2 * Vector((0, math.cos(a), -math.sin(a))))
 
 
 def kneel_leg(calf, P, leg):
     """front leg kneeling on its carpus at the shared contact point (the elbow must be L1 from it)"""
     carpus_on_ground(calf, P, leg, knee_points(calf)[leg])
     P.flex[leg] = KNEEL_FLEX
+    P.kneel = dict(getattr(P, "kneel", {})); P.kneel[leg] = (knee_points(calf)[leg], 1.0)
 
 
-def knee_res(calf, leg):
-    K = knee_points(calf)[leg]; l1 = L1(calf, leg); n = elbow_name(leg)
-    return lambda M: (M[n].translation - K).length - l1
-
-
-def elbow_ahead_res(calf, leg, dy):
-    """elbow `dy` behind (+) the knee contact"""
-    K = knee_points(calf)[leg]; n = elbow_name(leg)
-    return lambda M: M[n].translation.y - (K.y + dy)
-
-
-def hip_z_res(z):
-    return lambda M: 0.5 * (M["BackLeg.L"].translation.z + M["BackLeg.R"].translation.z) - z
+def extend_leg(calf, P, leg, reach=EXT_REACH, flex=EXT_FLEX, dx=0.0):
+    """fore leg stretched forward on the ground from its current elbow (lying): fetlock `reach` x chain ahead,
+    hoof resting on the ground"""
+    E = fk(calf, P)[elbow_name(leg)].translation
+    z = 0.004 - min(hoof_offset(calf, leg, flex, w).z for w in ("toe", "heel"))
+    dist = reach * calf.chain_len[leg]
+    dy = math.sqrt(max(0.0, dist * dist - (E.z - z) ** 2 - dx * dx))
+    set_foot(calf, P, leg, (E.x + dx, E.y - dy, z))
+    P.flex[leg] = flex
+    if hasattr(P, "kneel"):
+        P.kneel = {k: v for k, v in P.kneel.items() if k != leg}
 
 
 def lying_folded(calf):
-    """sternal recumbency on the right hip, hind legs folded to the left (left hind on top), both fore legs
-    folded under the chest. LieDown passes through it; GetUp starts by returning to it."""
-    P = _lying_base(calf)
+    """lying body with both fore legs folded under the chest (carpi on their contacts): the chest has just
+    settled in LieDown; GetUp folds the legs back to it before rising."""
+    P = _lying_body(calf)
     for leg in FRONT:
         kneel_leg(calf, P, leg)
     return P
 
 
 def lying(calf):
-    """LYING (LieDown end == Lying_Idle loop pose == GetUp start): sternal recumbency, both fore legs folded
-    under the chest (carpi on the ground), pelvis rolled onto the right hip, hind legs folded to the left, head up.
-    (The GiM reference stretches the upper fore leg forward; with this rig's front poles in front of/below the
-    elbow a forward leg can only bend its carpus downward mid-transition, so the folded posture is used.)"""
-    P = lying_folded(calf)
-    P.neck = [0.0, 1.0, 1.0]
-    P.head = Vector((6.0, 4.0, -4.0))
-    return P
+    """LYING (LieDown end == Lying_Idle loop pose == GetUp start): sternal recumbency, both fore legs stretched
+    forward on the ground (as in the GiM reference), pelvis rolled onto the right hip, hind legs folded to the left,
+    head up."""
+    key = ("lying", id(calf))
+    if key not in _CACHE:
+        P = _lying_body(calf)
+        P.neck = [0.0, 1.0, 1.0]
+        P.head = Vector((6.0, 4.0, -4.0))
+        extend_leg(calf, P, "LF", dx=0.015)
+        extend_leg(calf, P, "RF", dx=0.045, reach=EXT_REACH - 0.02)    # right hoof tucked in under the chin
+        P.kneel = {}
+        _CACHE[key] = P
+    return cp(_CACHE[key])
 
 
-# ---------------------------------------------------------------------------- transition key poses
+# ---------------------------------------------------------------------------- LieDown key poses
 def sniff(calf):
-    """standing, nose to the ground, weight a little back (inspecting the spot)"""
+    """standing, nose to the ground; the head drop comes from the neck, the elbows keep their standing distance to
+    the hooves (loaded carpi stay near their rest bend)"""
     P = stand()
-    P.body_off = Vector((0.0, 0.012, -0.015))
-    P.body_rot = Vector((1.5, 0.0, 0.0))
+    P.body_off = Vector((0.0, 0.02, 0.0))
+    P.body_rot = Vector((1.0, 0.0, 0.0))
     P.neck = [14.0, 16.0, 14.0]
     P.head = Vector((16.0, 0.0, 0.0))
     P.ears = {"L": Vector((12.0, 4.0, -8.0)), "R": Vector((12.0, 4.0, -8.0))}
     P.tail = [(0.0, -2.0)] * 7
+    solve_body(calf, P, [shell_res(calf, "LF", D_STAND), shell_res(calf, "RF", D_STAND)], ["z", "roll"])
     return P
 
 
-def kneel_prep(calf):
-    """left fore lifts and flexes, the chest starts to sink, head stays low"""
+def rock_back(calf):
+    """weight rocks back and onto the right fore (fore legs braced forward), the left fore lifts and folds"""
     P = sniff(calf)
-    P.body_off = Vector((-0.01, 0.0, -0.07))
-    P.body_rot = Vector((5.0, 0.0, 0.0))
-    P.neck = [12.0, 12.0, 10.0]
+    P.body_off = Vector((0.0, 0.10, P.body_off.z))
+    P.body_rot = Vector((3.0, 2.5, 0.0))
+    P.neck = [10.0, 12.0, 10.0]
+    P.head = Vector((12.0, 0.0, 0.0))
+    solve_body(calf, P, [shell_res(calf, "RF", D_STAND)], ["z"])
     K = knee_points(calf)["LF"]
-    set_foot(calf, P, "LF", Vector((K.x, K.y + 0.14, 0.20)))
-    P.flex["LF"] = 60.0
+    set_foot(calf, P, "LF", Vector((K.x, -0.29, 0.13)))
+    P.flex["LF"] = 75.0
     return P
 
 
 def kneel_left(calf):
-    """left carpus touches down; right fore still on its hoof, strongly bent"""
-    P = kneel_prep(calf)
-    P.body_rot = Vector((12.0, 0.0, 0.0))
+    """left carpus touches down; the right fore still carries the chest, rolled onto its toe"""
+    P = rock_back(calf)
+    P.body_rot = Vector((10.0, -5.0, 0.0))
     P.neck = [2.0, 4.0, 4.0]
     P.head = Vector((8.0, 0.0, 0.0))
     kneel_leg(calf, P, "LF")
-    P.feet["RF"] = Vector((0, 0, 0))
-    solve_body(calf, P, [knee_res(calf, "LF"), elbow_ahead_res(calf, "LF", 0.05), hip_z_res(0.70)],
+    P.feet["RF"], P.flex["RF"] = Vector((0, 0, 0)), 0.0
+    solve_body(calf, P, [knee_res(calf, "LF"), elbow_ahead_res(calf, "LF", 0.06), hip_z_res(calf, 0.66)],
                ["y", "z", "pitch"])
+    solve_flex_on_pivot(calf, P, "RF", pivot_point(calf, "RF"), -50.0)
     return P
 
 
-def kneel_right_lift(calf):
-    P = kneel_left(calf)
-    K = knee_points(calf)["RF"]
-    set_foot(calf, P, "RF", Vector((K.x, K.y + 0.12, 0.13)))
-    P.flex["RF"] = 70.0
-    return P
-
-
-def kneel(calf, hip=0.70, ahead=0.05):
+def kneel(calf, hip=0.64, ahead=0.06):
     """both carpi on the ground, hind legs still standing: the classic kneeling pose"""
     P = kneel_left(calf)
     P.body_rot = Vector((P.body_rot.x, 0.0, 0.0))
     P.neck = [0.0, 2.0, 2.0]
     P.head = Vector((6.0, 0.0, 0.0))
     kneel_leg(calf, P, "RF")
-    solve_body(calf, P, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", ahead), hip_z_res(hip)],
-               ["y", "z", "pitch", "roll"])
+    solve_body(calf, P, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", ahead),
+                         hip_z_res(calf, hip)], ["y", "z", "pitch", "roll"])
     return P
 
 
 def hind_lowering(calf):
-    """hindquarters sinking down and back toward the right hip, chest following the forearms back"""
+    """hindquarters sinking down and back toward the right hip: the hocks travel back and down (hooves planted),
+    the chest follows the forearms back"""
     P = kneel(calf)
-    P.femur = {"LH": 30.0, "RH": 32.0}
     P.spine = {"Back": (0.0, 0.0, 0.4 * HIP_ROLL), "Torso": (0.0, 0.0, -0.4 * HIP_ROLL)}
     P.neck = [6.0, 6.0, 4.0]
     P.head = Vector((6.0, 1.0, 0.0))
     P.tail = [(0.0, -10.0), (0.0, -6.0), (0.0, -4.0), (2.0, 0.0), (3.0, 0.0), (3.0, 0.0), (2.0, 0.0)]
-    solve_body(calf, P, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", 0.15), hip_z_res(0.46)],
-               ["y", "z", "pitch", "roll"])
+    solve_body(calf, P, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", 0.14),
+                         hip_z_res(calf, 0.50)], ["y", "z", "pitch", "roll"])
+    for leg in HIND:
+        solve_femur(calf, P, leg, 0.20)
     return P
 
 
 def rump_down(calf):
-    """hindquarters resting on the right hip, hind hooves still where they stood, chest nearly down"""
+    """hindquarters resting on the right hip, hind hooves still where they stood (hocks on the ground behind them),
+    chest nearly down"""
     P = lying_folded(calf)
+    P.spine = {"Back": (0.0, 0.0, 0.85 * HIP_ROLL), "Torso": (0.0, 0.0, -0.85 * HIP_ROLL)}
     for leg in HIND:
         P.feet[leg] = Vector((0, 0, 0))
         P.flex[leg] = 0.0
-    P.femur = {"LH": 50.0, "RH": 55.0}
     P.neck = [4.0, 4.0, 3.0]
     P.head = Vector((5.0, 2.0, -2.0))
-    solve_body(calf, P, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", 0.23)],
+    solve_body(calf, P, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", 0.22)],
                ["y", "z", "roll"])
+    for leg in HIND:
+        solve_femur(calf, P, leg, 0.10)
     return P
 
 
+def fore_mid(calf, leg, dy, z, flex, clear=0.025):
+    """swing key of a fore leg near its knee contact (dy ahead - / behind + of the contact, fetlock height z, raised
+    so the hoof clears the ground by `clear`)"""
+    K = knee_points(calf)[leg]
+    z = max(z, clear - min(hoof_offset(calf, leg, flex, w).z for w in ("toe", "heel")))
+    return (Vector((K.x, K.y + dy, z)) - rest_foot(calf, leg), flex)
+
+
 # ============================================================================ clips
-def lie_down(calf):
-    """FRONT end first: sniff the spot, left carpus down, right carpus down, hindquarters sink onto the right hip
-    while the chest follows the forearms back, hind legs slide out to the left, head comes up."""
+V0 = Vector((0, 0, 0))
+
+
+def lie_down(calf, N=150):
+    """FRONT end first: sniff the spot, rock back, left carpus down (the loaded right fore rolls onto its toe),
+    right carpus down, hindquarters sink onto the right hip (hocks back and down, hooves planted), hind legs lifted
+    into the lying spots, chest settles on the sternum, then each fore leg is stretched forward; head comes up."""
     S = stand()
-    kp, kl, krl, kn = kneel_prep(calf), kneel_left(calf), kneel_right_lift(calf), kneel(calf)
+    sn, rb, kl, kn = sniff(calf), rock_back(calf), kneel_left(calf), kneel(calf)
     hl, rd, lf, ly = hind_lowering(calf), rump_down(calf), lying_folded(calf), lying(calf)
     kn_low = cp(kn); kn_low.neck = [6.0, 8.0, 6.0]; kn_low.neck_yaw = [-2.0, -2.0, -1.0]; kn_low.head = Vector((10.0, -3.0, 2.0))
-    body = [(0, S, "stop"), (14, sniff(calf)), (26, kp), (35, kl), (45, kn), (54, kn_low, "stop"),
-            (70, hl), (84, rd), (96, lf, "stop"), (120, ly, "stop")]
-    rest = (Vector((0, 0, 0)), 0.0)
-    feet = {"LF": [(0, rest, "stop"), (17, rest, "stop"), (26, foot_of(kp, "LF")), (35, foot_of(kl, "LF"), "stop"),
-                   (120, foot_of(ly, "LF"), "stop")],
-            "RF": [(0, rest, "stop"), (34, rest, "stop"), (40, foot_of(krl, "RF")), (45, foot_of(kn, "RF"), "stop"),
-                   (120, foot_of(ly, "RF"), "stop")],
-            "LH": [(0, rest, "stop"), (83, rest, "stop"), (96, foot_of(lf, "LH"), "stop"), (120, foot_of(ly, "LH"), "stop")],
-            "RH": [(0, rest, "stop"), (84, rest, "stop"), (98, foot_of(lf, "RH"), "stop"), (120, foot_of(ly, "RH"), "stop")]}
-    lock = {"LF": [(35, 120)], "RF": [(45, 120)]}
-    planted = {"LF": [(0, 17)], "RF": [(0, 34)], "LH": [(0, 83), (96, 120)], "RH": [(0, 84), (98, 120)]}
-    return 120, clip_fn(calf, body, feet, lock), lock, planted
+    lf_look = cp(lf); lf_look.neck = [4.0, 4.0, 3.0]; lf_look.neck_yaw = [4.0, 5.0, 4.0]; lf_look.head = Vector((8.0, 6.0, -4.0))
+    ly_turn = cp(ly); ly_turn.neck = [2.0, 3.0, 2.0]; ly_turn.neck_yaw = [-2.0, -3.0, -2.0]; ly_turn.head = Vector((7.0, -2.0, -2.0))
+    rest = (V0.copy(), 0.0)
+    toeL, toeR = pivot_point(calf, "LF"), pivot_point(calf, "RF")
+    hind_t0 = {"LH": 85, "RH": 86}
+    hind_mid = {leg: lifted(rest, foot_of(lf, leg), 0.5, 0.025, -20.0) for leg in HIND}
+    # rump settling while the hind hooves are lifted into the lying spots: femurs keep the hocks off the ground
+    settle = A.blend_pose(rd, lf, 0.6)
+    settle.auto_top = False          # blend_pose returns a fresh Pose() (auto_top on)
+    for leg in HIND:
+        settle.feet[leg], settle.flex[leg] = hind_mid[leg]
+    solve_body(calf, settle, [knee_res(calf, "LF"), knee_res(calf, "RF")], ["z", "roll"])
+    for leg in HIND:
+        solve_femur(calf, settle, leg, 0.06)
+        fit_femur(calf, settle, leg, hock_min=HOCK_MIN + 9.0)
+    # left-fore lift-off: the right elbow stays at its standing distance (the keys must not over-reach the loaded leg)
+    lo = A.blend_pose(sn, rb, 0.5); lo.auto_top = False
+    lo.feet["LF"], lo.flex["LF"] = foot_on_pivot(calf, "LF", toeL, 22.0)
+    solve_body(calf, lo, [shell_res(calf, "RF", D_STAND)], ["z"])
+    body = [(0, S, "stop"), (14, sn), (19, lo), (24, rb, "stop"), (34, kl, "stop"), (48, kn, "stop"), (56, kn_low, "stop"),
+            (70, hl), (84, rd), (93, settle), (98, lf, "stop"), (114, lf_look), (134, ly_turn), (N, ly, "stop")]
+    toeL, toeR = pivot_point(calf, "LF"), pivot_point(calf, "RF")
+    lift = foot_on_pivot(calf, "LF", toeL, 26.0); lift = (lift[0] + Vector((0.0, 0.015, 0.035)), 34.0)
+    feet = {"LF": [(0, rest, "stop"), (14, rest, "stop"), (19, foot_on_pivot(calf, "LF", toeL, 22.0)),
+                   (21, lift), (24, foot_of(rb, "LF")), (34, foot_of(kl, "LF"), "stop"), (102, foot_of(lf, "LF"), "stop"),
+                   (112, fore_mid(calf, "LF", -0.15, 0.07, 30.0)), (122, foot_of(ly, "LF"), "stop"),
+                   (N, foot_of(ly, "LF"), "stop")],
+            "RF": [(0, rest, "stop"), (22, rest, "stop"), (34, foot_of(kl, "RF")),
+                   (36, foot_on_pivot(calf, "RF", toeR, kl.flex["RF"] + 6.0)),
+                   (40, fore_mid(calf, "RF", -0.10, 0.10, 45.0)), (44, fore_mid(calf, "RF", 0.08, 0.075, 100.0)),
+                   (48, foot_of(kn, "RF"), "stop"),
+                   (112, foot_of(lf, "RF"), "stop"), (122, fore_mid(calf, "RF", -0.15, 0.07, 30.0)),
+                   (132, foot_of(ly, "RF"), "stop"), (N, foot_of(ly, "RF"), "stop")]}
+    for leg, t0 in hind_t0.items():
+        feet[leg] = [(0, rest, "stop"), (t0, rest, "stop"), (t0 + 6, hind_mid[leg]),
+                     (t0 + 12, foot_of(lf, leg), "stop"), (N, foot_of(ly, leg), "stop")]
+    lock = {"LF": [(34, 102)], "RF": [(48, 112)]}
+    pivots = {"LF": [(14, 19, "toe", toeL, False)], "RF": [(22, 36, "toe", toeR)]}    # LF: heel lift while unloading
+    planted = {"LF": [(0, 14), (122, N)], "RF": [(0, 22), (132, N)], "LH": [(0, 85), (97, N)], "RH": [(0, 86), (98, N)]}
+    stand_ok = [(0, 16)]          # frames where both fore legs stand loaded (carpus limit)
+    cap = lambda f: A.ease(f / 14.0)      # loaded-leg reach cap eases off the rest clamp over the sniff
+    return N, clip_fn(calf, body, feet, lock, pivots, planted=planted, guard_cap=cap), dict(lock=lock, pivots=pivots, planted=planted, stand=stand_ok)
 
 
-def get_up(calf):
-    """HIND end first: gather, lunge forward onto the knees while the hind legs straighten (rump up), then the left
-    fore steps up onto its hoof, then the right, weight shift, stand."""
+GATHER = {"LH": (0.17, 0.555), "RH": (-0.17, 0.555)}   # GetUp: hind hooves gathered beside/behind the belly (x, y)
+
+
+def get_up(calf, N=150):
+    """HIND end first: fold the fore legs back under onto the knees, gather the hind hooves beside the belly, lunge
+    forward on the knees while the hind legs lift the rump, step each hind hoof forward under the hips, roll onto
+    the right knee and step the left fore forward (toe first), push, step the right fore, rise, stand."""
     S, ly, lf = stand(), lying(calf), lying_folded(calf)
+    rest = (V0.copy(), 0.0)
+    gat = {leg: (Vector((x, y, rest_foot(calf, leg).z)) - rest_foot(calf, leg), 0.0) for leg, (x, y) in GATHER.items()}
     prep = cp(ly); prep.neck = [-4.0, -4.0, -2.0]; prep.head = Vector((0.0, 1.0, -2.0))
     prep.ears = {"L": Vector((10.0, 0.0, -10.0)), "R": Vector((10.0, 0.0, -10.0))}
+    folded = cp(lf); folded.neck = [2.0, 2.0, 1.0]; folded.head = Vector((4.0, 0.0, 0.0)); folded.ears = prep.ears
     gather = cp(lf)
-    gather.spine = {"Back": (0.0, 0.0, 0.3 * HIP_ROLL), "Torso": (0.0, 0.0, -0.3 * HIP_ROLL)}
-    gather.femur = {"LH": 45.0, "RH": 45.0}
+    gather.spine = {"Back": (0.0, 0.0, 0.15 * HIP_ROLL), "Torso": (0.0, 0.0, -0.15 * HIP_ROLL)}
     gather.neck = [-2.0, -2.0, 0.0]; gather.head = Vector((0.0, 0.0, 0.0)); gather.ears = prep.ears
-    gather.tail = list(LYING_TAIL)
     for leg in HIND:
-        gather.feet[leg] = Vector((0, 0, 0)); gather.flex[leg] = 0.0
-    solve_body(calf, gather, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", 0.26)],
-               ["y", "z", "roll"])
+        gather.feet[leg], gather.flex[leg] = gat[leg]
+    solve_body(calf, gather, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", 0.25),
+                              hip_z_res(calf, 0.39)], ["y", "z", "pitch", "roll"])
+    for leg in HIND:
+        solve_femur(calf, gather, leg, 0.16)
+        fit_femur(calf, gather, leg)
     lunge = kneel(calf, hip=0.52, ahead=0.12)
-    lunge.femur = {"LH": 22.0, "RH": 22.0}
     lunge.spine = {"Back": (0.0, 0.0, 0.1 * HIP_ROLL), "Torso": (0.0, 0.0, -0.1 * HIP_ROLL)}
     lunge.neck = [8.0, 9.0, 7.0]; lunge.head = Vector((8.0, 0.0, 0.0))
     lunge.tail = [(0.0, -10.0), (0.0, -6.0), (0.0, -2.0), (2.0, 6.0), (3.0, 8.0), (3.0, 6.0), (2.0, 4.0)]
-    solve_body(calf, lunge, [knee_res(calf, "LF"), knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", 0.12), hip_z_res(0.52)],
-               ["y", "z", "pitch", "roll"])
-    kn = kneel(calf)
-    kn.neck = [5.0, 6.0, 5.0]; kn.head = Vector((6.0, 0.0, 0.0))
-    kn_hold = cp(kn); kn_hold.neck = [4.0, 4.0, 3.0]; kn_hold.head = Vector((4.0, 0.0, 0.0))
-    # left fore steps up: knee lifts, hoof swings forward and plants at its rest position
-    step = cp(kn_hold)            # no body roll while a carpus is locked (the IK pole plane would tilt the knee)
+    for leg in HIND:
+        lunge.feet[leg], lunge.flex[leg] = gat[leg]
+        solve_femur(calf, lunge, leg, 0.19)
+    kn = kneel(calf, hip=0.64, ahead=0.05)
+    kn.neck = [4.0, 4.0, 3.0]; kn.head = Vector((4.0, 0.0, 0.0))
+    for leg in HIND:
+        solve_femur(calf, kn, leg, 0.24)
+    kn2 = cp(kn); kn2.neck = [2.0, 2.0, 2.0]; kn2.head = Vector((2.0, 0.0, 0.0))
+    # left fore steps up: body rolls onto the right knee (lifts the left elbow), hoof planted toe first at its rest spot
+    step = cp(kn); step.body_rot = Vector((kn.body_rot.x - 2.0, 7.0, 0.0))
     step.neck = [0.0, 0.0, 0.0]; step.head = Vector((2.0, 0.0, 0.0))
-    E = head(calf, kn, elbow_name("LF"))
-    swing = (Vector((E.x, E.y - 0.10, 0.20)) - rest_foot(calf, "LF"), 20.0)
-    push = cp(step); push.body_off = push.body_off + Vector((0.0, -0.01, 0.03))
-    push.body_rot = Vector((push.body_rot.x - 2.0, 0.0, 0.0))
+    step.kneel = {"RF": (knee_points(calf)["RF"], 1.0)}
+    toeL, toeR = pivot_point(calf, "LF"), pivot_point(calf, "RF")
+    step.feet["LF"], step.flex["LF"] = foot_on_pivot(calf, "LF", toeL, 0.0)
+    solve_body(calf, step, [knee_res(calf, "RF"), elbow_ahead_res(calf, "LF", 0.0)], ["z", "y"])
+    solve_flex_on_pivot(calf, step, "LF", toeL, -58.0)
+    push = cp(step); push.body_rot = Vector((step.body_rot.x - 2.0, 4.0, 0.0))
     push.neck = [-4.0, -4.0, -2.0]; push.head = Vector((0.0, 0.0, 0.0))
-    solve_body(calf, push, [knee_res(calf, "RF")], ["z"])
-    # right fore comes up: body rises on the planted left hoof and the hind legs
-    rise = stand()
-    rise.body_off = Vector((0.0, 0.0, -0.14)); rise.body_rot = Vector((7.0, 2.0, 0.0))
+    solve_body(calf, push, [knee_res(calf, "RF"), fetlock_res(calf, "LF", -50.0)], ["z", "y"])
+    # right fore comes up and plants toe first; the body rises on the fore hooves and the hind legs. Rise/up are
+    # solved on the fore joints: the elbows stay far enough behind/above the hooves for the fetlock limit, then the
+    # loaded legs straighten to their standing bend
+    rise = stand(); rise.body_off = Vector((0.0, 0.08, -0.10)); rise.body_rot = Vector((6.0, 0.0, 0.0))
     rise.neck = [-6.0, -6.0, -4.0]; rise.head = Vector((-2.0, 0.0, 0.0))
-    E = head(calf, push, elbow_name("RF"))
-    swing_r = (Vector((E.x, E.y - 0.08, 0.18)) - rest_foot(calf, "RF"), 25.0)
-    up = stand(); up.body_off = Vector((0.0, -0.01, -0.03)); up.body_rot = Vector((1.0, -1.0, 0.0))
+    rise.feet["RF"], rise.flex["RF"] = foot_on_pivot(calf, "RF", toeR, 6.0)
+    solve_body(calf, rise, [fetlock_res(calf, "LF", -45.0)], ["z"])
+    up = stand(); up.body_off = Vector((0.0, 0.015, -0.02)); up.body_rot = Vector((1.5, 0.0, 0.0))
     up.neck = [-6.0, -5.0, -3.0]; up.head = Vector((-3.0, -2.0, 0.0))
     up.ears = {"L": Vector((6.0, -4.0, -6.0)), "R": Vector((6.0, -4.0, -6.0))}
+    solve_body(calf, up, [shell_res(calf, "LF", D_STAND), shell_res(calf, "RF", D_STAND)], ["z", "roll"])
     settle = stand(); settle.neck = [1.0, 1.0, 1.0]; settle.head = Vector((1.0, 1.0, 0.0))
-    body = [(0, ly, "stop"), (10, prep), (22, gather), (34, lunge), (44, kn), (52, kn_hold, "stop"),
-            (60, step), (70, push), (84, rise), (97, up), (109, settle), (120, S, "stop")]
-    rest = (Vector((0, 0, 0)), 0.0)
-    feet = {"LF": [(0, foot_of(lf, "LF"), "stop"), (52, foot_of(lf, "LF"), "stop"), (60, swing), (68, rest, "stop"),
-                   (120, rest, "stop")],
-            "RF": [(0, foot_of(lf, "RF"), "stop"), (70, foot_of(lf, "RF"), "stop"), (78, swing_r), (87, rest, "stop"),
-                   (120, rest, "stop")],
-            "LH": [(0, foot_of(ly, "LH"), "stop"), (8, foot_of(ly, "LH"), "stop"), (22, rest, "stop"), (120, rest, "stop")],
-            "RH": [(0, foot_of(ly, "RH"), "stop"), (6, foot_of(ly, "RH"), "stop"), (20, rest, "stop"), (120, rest, "stop")]}
-    lock = {"LF": [(0, 52)], "RF": [(0, 70)]}      # lock ends exactly on keys that satisfy it (kn_hold, push)
-    planted = {"LF": [(68, 120)], "RF": [(87, 120)], "LH": [(22, 120)], "RH": [(20, 120)]}
-    return 120, clip_fn(calf, body, feet, lock), lock, planted
+    body = [(0, ly, "stop"), (8, prep), (28, folded, "stop"), (40, gather), (52, lunge), (62, kn, "stop"),
+            (70, kn2, "stop"), (84, step, "stop"), (92, push, "stop"), (110, rise), (126, up), (138, settle), (N, S, "stop")]
+    feet = {"LF": [(0, foot_of(ly, "LF"), "stop"), (4, foot_of(ly, "LF"), "stop"),
+                   (13, fore_mid(calf, "LF", -0.15, 0.07, 30.0)), (22, foot_of(lf, "LF"), "stop"),
+                   (70, foot_of(lf, "LF"), "stop"), (77, fore_mid(calf, "LF", -0.02, 0.17, 80.0)),
+                   (84, foot_of(step, "LF"), "stop"), (104, rest, "stop"), (N, rest, "stop")],
+            "RF": [(0, foot_of(ly, "RF"), "stop"), (10, foot_of(ly, "RF"), "stop"),
+                   (19, fore_mid(calf, "RF", -0.15, 0.07, 30.0)), (28, foot_of(lf, "RF"), "stop"),
+                   (92, foot_of(lf, "RF"), "stop"), (99, fore_mid(calf, "RF", -0.06, 0.18, 80.0)),
+                   (106, foot_on_pivot(calf, "RF", toeR, 14.0), "stop"), (111, foot_of(rise, "RF")), (120, rest, "stop"),
+                   (N, rest, "stop")]}
+    for leg, t0, t1 in (("LH", 26, 56), ("RH", 28, 61)):
+        a = foot_of(ly, leg)
+        feet[leg] = [(0, a, "stop"), (t0, a, "stop"), (t0 + 6, lifted(a, gat[leg], 0.5, 0.02, -25.0)),
+                     (t0 + 12, gat[leg], "stop"), (t1, gat[leg], "stop"), (t1 + 4, lifted(gat[leg], rest, 0.5, 0.04, 30.0)),
+                     (t1 + 9, rest, "stop"), (N, rest, "stop")]
+    # mid-gather: hind hooves in the air on their way under the belly; femurs keep the hind joints in range
+    gm = A.blend_pose(folded, gather, 0.5); gm.auto_top = False
+    gm.spine = {"Back": (0.0, 0.0, 0.25 * HIP_ROLL), "Torso": (0.0, 0.0, -0.25 * HIP_ROLL)}   # pelvis unrolls early: frees the right hind
+    for leg in HIND:
+        gm.feet[leg], gm.flex[leg] = hermite(feet[leg], _foot_combine)(33)
+    for leg in FRONT:
+        kneel_leg(calf, gm, leg)
+    solve_body(calf, gm, [knee_res(calf, "LF"), knee_res(calf, "RF")], ["z", "roll"])
+    for leg in HIND:
+        fit_femur(calf, gm, leg)
+    body.insert(3, (33, gm))
+    lock = {"LF": [(22, 70)], "RF": [(28, 92)]}
+    pivots = {"LF": [(84, 104, "toe", toeL)], "RF": [(106, 120, "toe", toeR)]}
+    planted = {"LF": [(0, 4), (104, N)], "RF": [(0, 10), (120, N)],
+               "LH": [(0, 26), (38, 56), (65, N)], "RH": [(0, 28), (40, 61), (70, N)]}
+    stand_ok = [(128, N)]
+    return N, clip_fn(calf, body, feet, lock, pivots, planted=planted), dict(lock=lock, pivots=pivots, planted=planted, stand=stand_ok)
 
 
 def lying_idle(calf, N=150):
     """loop at LYING: breathing, cud chewing, looking around, ear flicks, a tail flick"""
     ly = lying(calf)
+
     def look(yaw, pitch=0.0, tilt=0.0):
         P = cp(ly)
         P.neck_yaw = [ly.neck_yaw[0] + 0.3 * yaw, ly.neck_yaw[1] + 0.35 * yaw, ly.neck_yaw[2] + 0.35 * yaw]
@@ -487,15 +883,24 @@ def lying_idle(calf, N=150):
         P.tail = [(s + k * 12.0 * max(0, i - 2) / 4.0 * math.sin(2 * math.pi * (f - 64) / 14.0), l + k * 8.0 * (i >= 3))
                   for i, (s, l) in enumerate(P.tail)]
         return P
-    lock = {"RF": [(0, N)], "LF": [(0, N)]}
     planted = {leg: [(0, N)] for leg in LEGS}
-    return N, clip_fn(calf, body, feet, lock, overlays=(overlay,)), lock, planted
+    return N, clip_fn(calf, body, feet, {}, {}, overlays=(overlay,), planted=planted), dict(lock={}, pivots={}, planted=planted, stand=[])
 
 
-# ============================================================================ mesh ground check
+# ============================================================================ QA
+def planted_from(plan):
+    return lambda leg, f: in_plan(plan, leg, f)
+
+
+def contact_frames(info, leg, f):
+    """leg bears weight or rests on the ground: planted hoof, hoof pivot or knee lock"""
+    return (in_plan(info["planted"], leg, f) or in_plan(info["lock"], leg, f)
+            or any(iv[0] <= f <= iv[1] for iv in info["pivots"].get(leg, ())))
+
+
 class GroundCheck:
-    """Evaluates the cage mesh Calf_LOD2 (armature modifier on) and reports min z of body (non-hoof)
-    vertices and per-leg hoof vertices (orig_part == 2 faces)."""
+    """Evaluates a cage mesh (default Calf_LOD2, armature modifier on): min z of body (non-hoof) vertices by region,
+    and per-leg hoof vertices (orig_part == 2 faces) for planted and for swinging hooves."""
 
     def __init__(self, calf, obj="Calf_LOD2"):
         self.calf = calf
@@ -510,7 +915,6 @@ class GroundCheck:
         co = np.zeros(len(me.vertices) * 3, np.float32); me.vertices.foreach_get("co", co)
         self.rest = co.reshape(-1, 3)
         self.hoof = hoof
-        # region of every vertex by dominant deform bone (for the report breakdown only)
         gname = {g.index: g.name for g in self.ob.vertex_groups}
         region = []
         for v in me.vertices:
@@ -528,6 +932,7 @@ class GroundCheck:
             sx = 1 if leg[0] == "L" else -1
             sy = -1 if leg[1] == "F" else 1
             self.leg_of[leg] = hoof & (np.sign(self.rest[:, 0]) == sx) & (np.sign(self.rest[:, 1]) == sy)
+        self.hoof_rest = {leg: float(self.rest[m, 2].min()) for leg, m in self.leg_of.items()}
 
     def sample(self, act, frames):
         mods = [m for m in self.ob.modifiers if m.type == "ARMATURE"]
@@ -535,23 +940,22 @@ class GroundCheck:
         for m in mods: m.show_viewport = True
         self.calf.use_action(act)
         rows = []
+        mw = np.array(self.ob.matrix_world)
         for f in frames:
             self.calf.sc.frame_set(f)
-            dg = bpy.context.evaluated_depsgraph_get()
-            ev = self.ob.evaluated_get(dg)
+            ev = self.ob.evaluated_get(bpy.context.evaluated_depsgraph_get())
             m = ev.to_mesh()
             co = np.zeros(len(m.vertices) * 3, np.float32); m.vertices.foreach_get("co", co)
             ev.to_mesh_clear()
-            co = co.reshape(-1, 3) @ np.array(self.ob.matrix_world)[:3, :3].T + np.array(self.ob.matrix_world)[:3, 3]
-            body = co[~self.hoof, 2]
+            co = co.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
             i = int(np.argmin(np.where(~self.hoof, co[:, 2], 9)))
             reg = {r: float(co[(self.region == r) & ~self.hoof, 2].min()) for r in ("trunk", "head", "leg", "tail")}
-            rows.append(dict(f=f, body=float(body.min()), body_at=self.rest[i].round(2).tolist(), region=reg,
+            rows.append(dict(f=f, body=float(co[i, 2]), body_at=self.rest[i].round(2).tolist(), region=reg,
                              hoof={leg: float(co[msk, 2].min()) for leg, msk in self.leg_of.items()}))
         for m, o in zip(mods, old): m.show_viewport = o
         return rows
 
-    def report(self, act, frames, planted=None, label=""):
+    def report(self, act, frames, info, label=""):
         rows = self.sample(act, frames)
         worst = min(rows, key=lambda r: r["body"])
         msg = (f"GROUND {label or act.name}: non-hoof min z {worst['body']*100:+.1f} cm (f{worst['f']}, rest-vert "
@@ -560,17 +964,96 @@ class GroundCheck:
         bad = [(r["f"], round(r["body"] * 100, 1)) for r in rows if r["body"] < -0.02]
         if bad:
             msg += f" | frames below -2 cm: {bad[:12]}{' ...' if len(bad) > 12 else ''}"
-        if planted:
-            hz = [r["hoof"][leg] for r in rows for leg in LEGS if planted(leg, r["f"])]
-            if hz:
-                msg += f" | planted hoof min z {min(hz)*100:+.1f} .. {max(hz)*100:+.1f} cm"
+        hz = [r["hoof"][leg] for r in rows for leg in LEGS if in_plan(info["planted"], leg, r["f"])]
+        if hz:
+            msg += f" | planted hoof min z {min(hz)*100:+.1f} .. {max(hz)*100:+.1f} cm"
+        sw = [(r["hoof"][leg] - min(0.0, self.hoof_rest[leg]), leg, r["f"]) for r in rows for leg in LEGS
+              if not contact_frames(info, leg, r["f"])]
+        if sw:
+            m = min(sw)
+            msg += f" | swinging hoof min z {m[0]*100:+.1f} cm ({m[1]} f{m[2]})"
         print(msg)
         return rows
 
 
-# ============================================================================ QA helpers
+def joint_series(calf, act, frames):
+    """baked joint angles about the root side axis per frame (deg, 0 = straight; the reviewer's convention):
+    fore carpus / fetlock, hind stifle / hock / fetlock"""
+    calf.use_action(act)
+    out = []
+    for f in range(frames + 1):
+        calf.sc.frame_set(f)
+        ae = calf.arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        W = {pb.name: pb.matrix for pb in ae.pose.bones}
+        ax = (W["Root"].to_3x3() @ X_AX).normalized()
+        yd = lambda n: W[n].to_3x3() @ Vector((0, 1, 0))
+        r = {}
+        for leg, d in LEGS.items():
+            up, lo = d["chain"]
+            if leg in FRONT:
+                r[leg + "_carpus"] = sang(yd(up), yd(lo), ax)
+                r[leg + "_fetlock"] = sang(yd(lo), yd(d["foot"]), ax)
+            else:
+                r[leg + "_stifle"] = sang(yd(d["top"]), yd(up), ax)
+                r[leg + "_hock"] = sang(yd(up), yd(lo), ax)
+                r[leg + "_fetlock"] = sang(yd(lo), yd(d["foot"]), ax)
+        out.append(r)
+    return out
+
+
+def joint_qa(calf, act, frames, info, label=""):
+    js = joint_series(calf, act, frames)
+    loaded = lambda leg, f: in_plan(info["planted"], leg, f) or any(iv[0] <= f <= iv[1] and (len(iv) < 5 or iv[4])
+                                                                    for iv in info["pivots"].get(leg, ()))
+    fet = [(js[f][leg + "_fetlock"], leg, f) for f in range(frames + 1) for leg in FRONT if loaded(leg, f)]
+    car = [(js[f][leg + "_carpus"], leg, f) for a, b in info["stand"] for f in range(a, b + 1) for leg in FRONT]
+    stf = [(js[f][leg + "_stifle"], leg, f) for f in range(frames + 1) for leg in HIND]
+    carp_all = [js[f][leg + "_carpus"] for f in range(frames + 1) for leg in FRONT]
+    hock_all = [js[f][leg + "_hock"] for f in range(frames + 1) for leg in HIND]
+    msg = f"JOINT {label or act.name}:"
+    if fet:
+        m = min(fet); msg += f" loaded fore fetlock min {m[0]:.1f} ({m[1]} f{m[2]}) [limit {FETLOCK_MIN:.0f}]"
+    if car:
+        m = max(car); msg += f" | standing carpus max {m[0]:.1f} ({m[1]} f{m[2]}) [limit {CARPUS_STAND_MAX:.0f}]"
+    m = max(stf); msg += f" | stifle max {m[0]:.1f} ({m[1]} f{m[2]}) [limit {STIFLE_MAX:.0f}]"
+    hk = min((js[f][leg + "_hock"], leg, f) for f in range(frames + 1) for leg in HIND)
+    msg += f" | hock min {hk[0]:.1f} ({hk[1]} f{hk[2]}) [limit {HOCK_MIN:.0f}] | carpus {min(carp_all):.0f}..{max(carp_all):.0f}"
+    fl = [(js[f][leg + "_fetlock"], leg, f) for f in range(frames + 1) for leg in FRONT]
+    msg += f" | fore fetlock (any) {min(fl)[0]:.0f} ({min(fl)[1]} f{min(fl)[2]})"
+    print(msg)
+    ok = ((not fet or min(fet)[0] >= FETLOCK_MIN - 0.5) and (not car or max(car)[0] <= CARPUS_STAND_MAX + 0.5)
+          and max(stf)[0] <= STIFLE_MAX + 0.5 and min(carp_all) > -5.0 and max(hock_all) < 0.0 and hk[0] >= HOCK_MIN - 0.5)
+    return js, ok
+
+
+def pivot_qa(calf, act, info, label=""):
+    """drift of the hoof contact point (toe tip / heel bulb, from the baked toe bone) over each pivot interval"""
+    calf.use_action(act)
+    worst, parts = 0.0, []
+    for leg, ivs in info["pivots"].items():
+        toe = LEGS[leg]["toe"]
+        for a, b, which, pt, *fl in ivs:
+            q = calf.rest[toe].inverted() @ hoof_local(calf, leg, which)
+            w, p0 = 0.0, None
+            for f in range(a, b + 1):
+                calf.sc.frame_set(f)
+                ae = calf.arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
+                p = ae.pose.bones[toe].matrix @ q
+                p0 = p0 or p.copy()
+                w = max(w, (p - p0).length)
+            parts.append(f"{leg} {which} f{a}-{b}{'' if (not fl or fl[0]) else ' (unloading)'} {w*1000:.2f}")
+            if not fl or fl[0]:
+                worst = max(worst, w)
+    if parts:
+        print(f"PIVOT {label or act.name}: loaded hoof contact point drift (from the interval start) {worst*1000:.2f} mm ["
+              + "; ".join(parts) + " mm]")
+    return worst
+
+
 def knee_qa(calf, act, frames, lock, label=""):
     """carpus (front knee) drift in xy and height while locked"""
+    if not lock:
+        return 0.0
     calf.use_action(act)
     worst, zr = 0.0, [9.0, -9.0]
     anchor = {}
@@ -585,6 +1068,46 @@ def knee_qa(calf, act, frames, lock, label=""):
                 zr = [min(zr[0], c.z), max(zr[1], c.z)]
     print(f"KNEE {label or act.name}: locked carpus slide {worst*1000:.2f} mm, height {zr[0]*100:.1f}..{zr[1]*100:.1f} cm")
     return worst
+
+
+def inside_qa(calf, act, frame, obj="Calf_LOD1", label=""):
+    """fraction of fore cannon / hoof vertices (dominant bone FrontLowerLeg / IKFrontLeg / FF) that lie inside the
+    closed skin (ray parity, 3 rays, 2 votes), e.g. a folded cannon swallowed by the forearm/brisket"""
+    from mathutils.bvhtree import BVHTree
+    ob = bpy.data.objects[obj]
+    for m in ob.modifiers:
+        if m.type == "ARMATURE": m.show_viewport = True
+    gname = {g.index: g.name for g in ob.vertex_groups}
+    dom = []
+    for v in ob.data.vertices:
+        best, bw = "", 0.0
+        for g in v.groups:
+            if g.weight > bw: best, bw = gname.get(g.group, ""), g.weight
+        dom.append(best)
+    calf.use_action(act); calf.sc.frame_set(frame)
+    ev = ob.evaluated_get(bpy.context.evaluated_depsgraph_get()); me = ev.to_mesh()
+    co = [ob.matrix_world @ v.co for v in me.vertices]
+    nr = [(ob.matrix_world.to_3x3() @ v.normal).normalized() for v in me.vertices]
+    bvh = BVHTree.FromPolygons(co, [tuple(p.vertices) for p in me.polygons]); ev.to_mesh_clear()
+    for m in ob.modifiers:
+        if m.type == "ARMATURE": m.show_viewport = False
+    dirs = [Vector((0, 0, 1)), Vector((0.3, 0.2, 0.93)).normalized(), Vector((-0.3, -0.2, 0.93)).normalized()]
+    res = {}
+    for i, n in enumerate(dom):
+        if not n.startswith(("FrontLowerLeg", "IKFrontLeg", "FF.")):
+            continue
+        p = co[i] + nr[i] * 0.003; votes = 0
+        for d in dirs:
+            o = p.copy(); k = 0
+            for _ in range(64):
+                hit = bvh.ray_cast(o, d)[0]
+                if hit is None: break
+                k += 1; o = hit + d * 1e-4
+            votes += k % 2
+        t = res.setdefault(n, [0, 0]); t[1] += 1; t[0] += votes >= 2
+    print(f"INSIDE {label or act.name} f{frame} ({obj}): " +
+          ", ".join(f"{n} {a}/{b} ({100*a/b:.0f}%)" for n, (a, b) in sorted(res.items())))
+    return res
 
 
 def bone_state(calf, act, f):
@@ -603,44 +1126,46 @@ def seam(calf, a, fa, b, fb):
     return dp, dr
 
 
-def pop_qa(calf, act, frames, loop=False, label=""):
-    """largest per-frame bone-head acceleration (2nd difference, mm/frame^2) and velocity: pops show as spikes"""
+def pop_qa(calf, act, frames, loop=False, label="", body_only=False):
+    """largest per-frame bone-head acceleration (2nd difference, mm/frame^2) and velocity: pops show as spikes.
+    body_only: trunk/neck/head bones only (the chest must not rebound when a knee lands)"""
     calf.use_action(act)
+    names = [pb.name for pb in calf.arm.pose.bones if not pb.name.startswith("PoleTarget")]   # unweighted IK helpers
+    if body_only:
+        names = [n for n in names if n in ("Body", "Back", "Torso", "Torso2", "Torso3", "Neck1", "Neck2", "Neck3", "Head")]
     pts = []
     for f in range(frames + 1):
         calf.sc.frame_set(f)
         ae = calf.arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
-        pts.append(np.array([list(pb.tail) for pb in ae.pose.bones]))
+        pts.append(np.array([list(ae.pose.bones[n].tail) for n in names]))
     P = np.array(pts)
     if loop:                       # frame N == frame 0: wrap around the seam
         P = np.concatenate([P[-2:-1], P, P[1:2]])
     acc = np.linalg.norm(P[2:] - 2 * P[1:-1] + P[:-2], axis=2).max(axis=1) * 1000
     vel = np.linalg.norm(P[1:] - P[:-1], axis=2).max(axis=1) * 1000
     i = int(np.argmax(acc))
-    print(f"POP {label or act.name}: max accel {acc.max():.1f} mm/f^2 at f{i + (0 if loop else 1)} | max speed {vel.max():.1f} mm/f")
+    print(f"POP {label or act.name}{' (trunk/head)' if body_only else ''}: max accel {acc.max():.1f} mm/f^2 at "
+          f"f{i + (0 if loop else 1)} | max speed {vel.max():.1f} mm/f")
     return acc, vel
 
 
-def planted_from(plan):
-    return lambda leg, f: in_plan(plan, leg, f)
-
-
-# ============================================================================ clips
-CLIPS = {}      # name -> (frames, fn, loop, lock, planted); filled by build()
+# ============================================================================ build
+CLIPS = {}      # name -> (frames, fn, loop, info); filled by build()
 
 
 def build(calf):
     made = []
+    _CACHE.clear()
     for name, maker, loop in (("LieDown", lie_down, False), ("Lying_Idle", lying_idle, True), ("GetUp", get_up, False)):
-        N, fn, lock, planted = maker(calf)
-        calf.make_clip(name, N, fn, loop=loop)
-        CLIPS[name] = (N, fn, loop, lock, planted)
+        N, fn, info = maker(calf)
+        make_clip_ex(calf, name, N, fn, loop=loop)
+        CLIPS[name] = (N, fn, loop, info)
         made.append(name)
     return made
 
 
 if __name__ == "__main__":
-    import argparse, subprocess
+    import argparse, subprocess, time
     ROOT = os.path.dirname(TOOLS)
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="src", default=os.path.join(ROOT, "build", "stage_b.blend"))
@@ -649,20 +1174,30 @@ if __name__ == "__main__":
     ap.add_argument("--out", default=None, help="test blend (default <scratch>/test.blend)")
     ap.add_argument("--render", default="all", help="'all', 'none' or comma list of clips")
     ap.add_argument("--step", type=int, default=4, help="render every n-th frame")
+    ap.add_argument("--no-inside", action="store_true", help="skip the (slower) LOD1 inside-the-skin test")
     a = ap.parse_args()
     SCR = a.scratch
     os.makedirs(SCR, exist_ok=True)
     a.out = a.out or os.path.join(SCR, "test.blend")
     calf = A.Calf(a.src)
+    t0 = time.time()
     names = build(calf)
+    print(f"built {names} in {time.time() - t0:.1f} s")
     gc = GroundCheck(calf)
+    all_ok = True
     for n in names:
-        N, fn, loop, lock, planted = CLIPS[n]
+        N, fn, loop, info = CLIPS[n]
         act = bpy.data.actions[n]
-        calf.qa(act, N, planted_from(planted), label=n)
-        knee_qa(calf, act, N, lock, label=n)
-        gc.report(act, range(0, N + 1, 2), planted_from(planted), label=n)
+        calf.qa(act, N, planted_from(info["planted"]), label=n)
+        knee_qa(calf, act, N, info["lock"], label=n)
+        pivot_qa(calf, act, info, label=n)
+        _, ok = joint_qa(calf, act, N, info, label=n)
+        all_ok &= ok
+        gc.report(act, range(0, N + 1, 2), info, label=n)
         pop_qa(calf, act, N, loop=loop, label=n)
+        pop_qa(calf, act, N, loop=loop, label=n, body_only=True)
+    if not a.no_inside:
+        inside_qa(calf, bpy.data.actions["Lying_Idle"], 0, label="Lying_Idle")
     acts = {n: bpy.data.actions[n] for n in names}
     for label, (x, fx), (y, fy) in (("LieDown end -> Lying_Idle start", ("LieDown", CLIPS["LieDown"][0]), ("Lying_Idle", 0)),
                                     ("Lying_Idle loop seam", ("Lying_Idle", CLIPS["Lying_Idle"][0]), ("Lying_Idle", 0)),
@@ -674,6 +1209,7 @@ if __name__ == "__main__":
         dp, dr = seam(calf, acts[x], fx, ref, 0)
         print(f"SEAM {label} vs make_clip(Pose()): {dp:.3f} mm / {dr:.3f} deg")
     bpy.data.actions.remove(ref)
+    print("JOINT limits:", "all OK" if all_ok else "VIOLATED (see JOINT lines)")
     calf.save(a.out)
     todo = names if a.render == "all" else ([] if a.render == "none" else a.render.split(","))
     for n in todo:
