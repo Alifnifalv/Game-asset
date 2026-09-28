@@ -158,3 +158,28 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 - **Follow-ups done:**
   - Hoof soles lifted onto z=0 in stage B (the source sank them 4.5 mm front / 12 mm hind).
   - `CalfSetup.cs` now sets `optimizeBones=false` (Strip Bones would remove the unweighted `Root` motion node) and `importTangents=Import`.
+
+### 2026-09-28: adversarial review of clip family `idle_graze` (commit b0e7536)
+- **Verdict: pass, with minor issues only.** No blocker or major issue was found. Re-ran `python3 tools/clips/idle_graze.py --no-render` on the current `build/stage_b.blend` (13:13, hooves on z=0). Then measured independently on Calf_LOD0, LOD1 and LOD2 (evaluated meshes; reviewer harness kept in the session scratchpad, not committed).
+- **Confirmed:**
+  - Weight-bearing hooves hold:
+    - fetlock slide ≤0.08 mm;
+    - every planted hoof **vertex** drifts ≤2.5 mm in xy (skin deformation only);
+    - front hooves bob ≤3 mm vertically, which is the known 2 mm `Pose()` reach clamp.
+  - Mesh ground: LOD0 non-hoof min z is 22.4 mm in every clip, the same as rest.
+  - Clearances stay positive: tail to thigh ≥27 mm, head to fore legs ≥9 cm, ears to legs ≥17 cm.
+  - Loop seams and Pose()/GRAZE boundaries are 0.0000 mm / 0°. The Root is never keyed.
+  - Carpus and hock always bend the anatomical way. Ear and head-roll sign conventions are verified numerically.
+- **Minor findings** (handed to the fix step):
+  1. **The muzzle never touches the ground.** LOD0 nose pad is 3.8–6.6 cm in `Graze_Loop` and each bite dips only about 7 mm. In the GiM reference (13–21 s) the muzzle rests on the ground. The source `Eating` clip is also ≥4.7 cm. At gameplay distance the gap barely shows.
+  2. **The right fore is "over at the knee" in GRAZE.**
+     - Carpus is 26.8° (15° in `Pose()`). The cannon slopes 17° instead of 10°, and the fetlock is 7° more dorsiflexed (−38° vs −31°).
+     - The cause: the elbow drops about 15 mm (body pitch plus body z).
+     - Real cattle keep the loaded carpus straight.
+  3. **The step lift-off is abrupt.** At `Graze_Start` f12 and `Graze_End` f13, the stepping fetlock jumps 8.6 mm in the first frame. The cannon's world-space jerk is 7.3°/f².
+  4. **The tear jerk snaps in one frame.** At `Graze_Loop` f11, f53 and f87, `flick()` starts at full speed: face pitch moves 1.1 → **6.5** → 3.7°/f, and the head's world jerk is 5.4°/f².
+  5. **The swing hoof grazes the ground on LOD2 only.** On LOD2 the stepping hoof comes back to 0 or −1 mm mid-swing (Start f15–16 and f22; End f16 and f22–23). LOD0 clears it by ≥7 mm.
+  6. **The fly-swat swish is weak.** The tail tip moves only ±8–12 cm sideways (Idle f64–84, Graze_Loop f56–76), so it barely reads from behind.
+  7. **The mesh has no mouth interior.** The only boundary edges are at the eyes. The 24° jaw in `Call` therefore stretches the lip skin into a flat sheet, most visible from the front.
+  8. **`Graze_End` walks the left fore backward 6 cm,** an unusual move for cattle. An alternative is a forward shuffle with root motion.
+- **Re-check after the pending stage B rebuild:** commit 813faea smooths the withers/neck weights, so the GRAZE nose height and the neck crest can shift.
