@@ -87,6 +87,8 @@ cam_data.lens = 50
 # determine head direction: centroid of top 5% z points
 top = sorted(pts, key=lambda p: -p.z)[: max(10, len(pts) // 20)]
 head_c = sum(top, Vector()) / len(top)
+if arm and "Head" in arm.data.bones:   # rest-pose head position is robust to head-down poses
+    head_c = arm.matrix_world @ arm.data.bones["Head"].head_local
 head_sign = 1 if head_c[fwd_axis] > ctr[fwd_axis] else -1
 fwd = Vector((0, 0, 0)); fwd[fwd_axis] = head_sign
 side = fwd.cross(Vector((0, 0, 1))).normalized()

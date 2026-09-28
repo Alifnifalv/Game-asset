@@ -8,9 +8,10 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 | Geometry (calf reshape, eyes, UVs, LODs) | Done, tuned against the side-view silhouette | `tools/calf_stage_a.py`, `tools/calf_stage_b.py` |
 | Rig upgrade | Jaw + Ear.L/R done; lower-leg tails fixed; 30 fps | `tools/calf_stage_b.py` |
 | Coat textures | In progress (subagent) | `tools/calf_textures.py` |
-| Existing clips on the reshaped rig (Eating/Idle) | Being checked (subagent) | `tools/check_animation.py`, `tools/rebake_leg_ik.py` |
+| Existing clips on the reshaped rig (Eating/Idle) | Done: leg IK re-solved (0 mm hoof gap; Idle front.R 2.3 mm unreachable in the source too) | `tools/check_animation.py`, `tools/rebake_leg_ik.py` |
 | Unity export + validator | Queued (subagent) | `tools/export_unity.py`, `tools/validate_export.py` |
-| New animation set | In progress: gait maths done, anim library written, clips next | `tools/anim_gait.py`, `tools/anim_lib.py` |
+| New animation set | Gaits done: Walk/Trot/Gallop (RM + in place), TurnLeft90/Right90. Key-pose families in progress | `tools/calf_animations.py`, `tools/anim_lib.py`, `tools/anim_gait.py`, `tools/clips/` |
+| Export rig | Hooves re-parented under the lower legs for engine blending (world motion unchanged, 0.000 mm) | `anim_lib.reparent_hooves_for_export` |
 | Fur, Unity setup script | Not started | see `docs/PLAN.md` |
 
 ## Log
@@ -57,3 +58,20 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 - Keep the original 43 bones (compatibility with the existing clips), plus Jaw/Ears.
 - Author at 30 fps. Unity uses a Generic rig with `Root` as the root node. Clips will ship in root-motion and in-place versions.
 - `build/` is gitignored (regenerable). Deliverables go to `Unity/Calf/`.
+
+### 2026-09-28: session 1, animation system
+- The **Blender 5 headless gotcha** cost time: `pose_bone.keyframe_insert` on a new action silently writes nothing (no slot). `Calf.new_action` builds slot + layer + keyframe strip + channelbag explicitly, and `write_curves` bulk-writes the fcurves with `foreach_set`.
+- **Leg reach.** The front legs are straight at rest (elbow→fetlock 0.489 m chain vs a 0.487 m drop), so an elbow-rooted IK can't place a foot forward or back. The fix has three parts:
+  - A virtual scapula pivot 0.28 m above the elbow is rotated to aim the leg at the foot. The hind femur aims about the hip.
+  - `Calf.reach_pass` vaults the body (height + pitch, dilated + Gaussian-smoothed, loop-aware) so planted legs always reach.
+  - Swing targets are clamped to the chain reach.
+
+  Result for Walk/Trot/Gallop RM: IK gap <0.1 mm, planted-foot slide 0 mm, loop seam 0 mm. The walk stride was shortened to 0.74 m / 24 frames (0.93 m/s) so the calf doesn't crouch.
+- **Turning in place:** the world-space foot planner (planted foot = home position at mid-stance) handles a yawing root. TurnLeft90/TurnRight90 have 0 mm slide.
+- **Subagent findings** (`tools/check_animation.py`, `tools/rebake_leg_ik.py`):
+  - The reshape caused 1–4.6 mm hoof separation in Eating/Idle; the IK re-bake fixes it.
+  - Hind legs reproduce the source best with no pole.
+  - The source skinning stretches the withers about 2× when grazing. Smoothing the Torso3/Neck1/FrontShoulder weights is still open.
+- **Imported clips don't key every bone.** Unkeyed bones inherit the previous clip's pose, in Blender and in Unity transitions. `complete_action` keys all missing channels at rest.
+- **Unity blending.** Hooves hang off Root in the source rig, so blend trees would blend hoof positions and leg rotations separately and the hooves would detach. `reparent_hooves_for_export` re-parents the hooves under the lower legs and re-bakes (world change 0.000 mm).
+- `tools/calf_animations.py` assembles everything into `build/stage_d.blend`. `tools/render_clip.py` renders root-tracking filmstrips/GIFs on a checker ground (makes sliding visible).

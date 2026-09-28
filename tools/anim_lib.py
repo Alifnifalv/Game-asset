@@ -582,3 +582,155 @@ def planted_fn_for(g: G.Gait):
     def f(leg, fr):
         return G.leg_phase(g, leg, (fr % g.frames) / g.frames) < g.duty * 0.98
     return f
+
+
+# ============================================================================== key-pose clips
+def pose_combine(terms):
+    """linear combination of poses: terms = [(weight, Pose), ...] (weights should sum to 1)"""
+    base = terms[0][1]
+    out = Pose()
+    def vsum(get): return sum((get(P) * w for w, P in terms), Vector((0, 0, 0)))
+    def fsum(get): return sum(get(P) * w for w, P in terms)
+    out.root_pos = vsum(lambda P: P.root_pos); out.root_yaw = fsum(lambda P: P.root_yaw)
+    out.body_off = vsum(lambda P: P.body_off); out.body_rot = vsum(lambda P: P.body_rot)
+    keys = set().union(*(P.spine.keys() for _, P in terms))
+    out.spine = {k: tuple(fsum(lambda P, i=i: P.spine.get(k, (0.0, 0.0, 0.0))[i]) for i in range(3)) for k in keys}
+    out.neck = [fsum(lambda P, i=i: P.neck[i]) for i in range(3)]
+    out.neck_yaw = [fsum(lambda P, i=i: P.neck_yaw[i]) for i in range(3)]
+    out.head = vsum(lambda P: P.head); out.jaw = fsum(lambda P: P.jaw)
+    out.ears = {s: vsum(lambda P, s=s: P.ears[s]) for s in ("L", "R")}
+    out.tail = [(fsum(lambda P, i=i: P.tail[i][0]), fsum(lambda P, i=i: P.tail[i][1])) for i in range(7)]
+    legs = set().union(*(P.feet.keys() for _, P in terms))
+    out.feet = {l: vsum(lambda P, l=l: P.feet.get(l, Vector((0, 0, 0)))) for l in legs}
+    if any(P.feet_world for _, P in terms):
+        # feet_world must be given for every leg on every pose that uses it
+        wl = set().union(*(P.feet_world.keys() for _, P in terms))
+        out.feet_world = {l: vsum(lambda P, l=l: P.feet_world[l]) for l in wl}
+    for attr in ("flex", "glide", "femur"):
+        ks = set().union(*(getattr(P, attr).keys() for _, P in terms))
+        setattr(out, attr, {k: fsum(lambda P, k=k: getattr(P, attr).get(k, 0.0)) for k in ks})
+    ks = set().union(*(P.top_rot.keys() for _, P in terms))
+    out.top_rot = {k: tuple(fsum(lambda P, k=k, i=i: P.top_rot.get(k, (0.0, 0.0, 0.0))[i]) for i in range(3)) for k in ks}
+    out.auto_top = base.auto_top
+    out.top_gain = {k: fsum(lambda P, k=k: P.top_gain[k]) for k in base.top_gain}
+    return out
+
+
+def keyed_pose_fn(keys, loop=False, overlays=()):
+    """keys: sorted list of (frame, Pose). Returns (frames, fn) with Catmull-Rom interpolation of whole poses
+    (smooth, no stops at keys). A key given as (frame, Pose, 'hold') makes the curve pass flat through it.
+    overlays: callables (frame, Pose) -> Pose applied after interpolation (breathing, chewing, flicks...)."""
+    ks = [(k[0], k[1]) for k in keys]
+    holds = {i for i, k in enumerate(keys) if len(k) > 2 and k[2] == "hold"}
+    N = ks[-1][0]
+    def at(i):
+        if loop:
+            m = len(ks) - 1
+            j = i % m
+            shift = (i // m) * N
+            return ks[j][0] + shift, ks[j][1]
+        return ks[min(len(ks) - 1, max(0, i))]
+    def fn(f):
+        i = 0
+        while i < len(ks) - 2 and f >= ks[i + 1][0]:
+            i += 1
+        f0, P1 = ks[i]; f1, P2 = ks[i + 1]
+        t = 0.0 if f1 == f0 else (f - f0) / (f1 - f0)
+        P0 = at(i - 1)[1] if (i > 0 or loop) else P1
+        P3 = at(i + 2)[1] if (i + 2 < len(ks) or loop) else P2
+        if i in holds: P0 = P2 if False else P1           # flat tangent at a held key
+        if (i + 1) in holds: P3 = P2
+        t2, t3 = t * t, t * t * t
+        w = (-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1, -1.5 * t3 + 2 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2)
+        P = pose_combine(list(zip(w, (P0, P1, P2, P3))))
+        for ov in overlays:
+            P = ov(f, P)
+        return P
+    return N, fn
+
+
+def ground_stance(calf, pose_fn, tol=0.006):
+    """stance_fn for key-pose clips: a foot counts as planted while its target is within `tol` of rest height"""
+    cache = {}
+    def st(leg, f):
+        if f not in cache:
+            P = pose_fn(f)
+            cache[f] = P
+        P = cache[f]
+        rest_z = calf.rest_head(LEGS[leg]["foot"]).z
+        if leg in P.feet_world:
+            return P.feet_world[leg].z - rest_z < tol
+        return P.feet.get(leg, Vector((0, 0, 0))).z < tol
+    return st
+
+
+# ============================================================================== rig finalisation for export
+HOOF_PARENT = {"IKFrontLeg.L": "FrontLowerLeg.L", "IKFrontLeg.R": "FrontLowerLeg.R",
+               "IKBackLeg.L": "BackLowerLeg.L", "IKBackLeg.R": "BackLowerLeg.R"}
+
+
+def reparent_hooves_for_export(calf, actions):
+    """Authoring keeps the hoof bones under Root (world-space feet). For engines that blend clips, hooves must
+    follow the legs, so re-parent each hoof bone under its lower leg and re-bake every action's hoof keys
+    so the world-space motion is unchanged."""
+    arm = calf.arm
+    # 1) sample pose-space hoof matrices for every action/frame with the current hierarchy
+    samples = {}
+    for act in actions:
+        calf.use_action(act)
+        lo, hi = int(act.frame_range[0]), int(act.frame_range[1])
+        rows = []
+        for f in range(lo, hi + 1):
+            calf.sc.frame_set(f)
+            dg = bpy.context.evaluated_depsgraph_get(); ae = arm.evaluated_get(dg)
+            rows.append({n: (ae.pose.bones[n].matrix.copy(), ae.pose.bones[p].matrix.copy()) for n, p in HOOF_PARENT.items()})
+        samples[act.name] = (lo, rows)
+    # 2) change hierarchy (rest pose unchanged)
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="EDIT")
+    for n, p in HOOF_PARENT.items():
+        eb = arm.data.edit_bones[n]; eb.use_connect = False; eb.parent = arm.data.edit_bones[p]
+    bpy.ops.object.mode_set(mode="OBJECT")
+    calf.par = {b.name: (b.parent.name if b.parent else None) for b in arm.data.bones}
+    # 3) rewrite hoof curves in the new parent space
+    for act in actions:
+        lo, rows = samples[act.name]
+        out = {}
+        for n in HOOF_PARENT:
+            vals = []
+            for r in rows:
+                M, PM = r[n]
+                local = (PM @ calf.rel(n)).inverted() @ M
+                loc, q, _ = local.decompose()
+                vals.append((loc, q))
+            out[n] = vals
+        cb = calf.channelbag(act)
+        # write_curves keys frames from 0; shift if the action starts later
+        calf.write_curves(act, out)
+        if lo:
+            for fc in cb.fcurves:
+                if any(fc.data_path == f'pose.bones["{n}"].{c}' for n in HOOF_PARENT for c in ("location", "rotation_quaternion")):
+                    for kp in fc.keyframe_points:
+                        kp.co[0] += lo; kp.handle_left[0] += lo; kp.handle_right[0] += lo
+
+
+def complete_action(calf, act):
+    """Key every bone the action does not animate at its rest value (constant), so the clip is self-contained:
+    unkeyed channels otherwise inherit the previous clip's pose (in Blender and in Unity transitions)."""
+    cb = calf.channelbag(act)
+    have = {(fc.data_path, fc.array_index) for fc in cb.fcurves}
+    lo, hi = act.frame_range
+    for n in calf.order:
+        for prop, vals in (("location", (0.0, 0.0, 0.0)), ("rotation_quaternion", (1.0, 0.0, 0.0, 0.0))):
+            dp = f'pose.bones["{n}"].{prop}'
+            for i, v in enumerate(vals):
+                if (dp, i) in have: continue
+                fc = cb.fcurves.new(dp, index=i, group_name=n)
+                fc.keyframe_points.add(2)
+                fc.keyframe_points.foreach_set("co", [lo, v, hi, v])
+                fc.keyframe_points.foreach_set("interpolation", [1, 1])
+                fc.update()
+    # quaternion-mode bones only: drop euler/scale curves that would fight the quaternions
+    for fc in list(cb.fcurves):
+        if fc.data_path.endswith("rotation_euler"):
+            cb.fcurves.remove(fc)
