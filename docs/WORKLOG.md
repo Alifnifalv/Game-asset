@@ -183,3 +183,40 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
   7. **The mesh has no mouth interior.** The only boundary edges are at the eyes. The 24° jaw in `Call` therefore stretches the lip skin into a flat sheet, most visible from the front.
   8. **`Graze_End` walks the left fore backward 6 cm,** an unusual move for cattle. An alternative is a forward shuffle with root motion.
 - **Re-check after the pending stage B rebuild:** commit 813faea smooths the withers/neck weights, so the GRAZE nose height and the neck crest can shift.
+
+### 2026-09-28: clip family `actions` (Death, Leap, HeadShake)
+**What:** `tools/clips/actions.py` (picked up by `tools/calf_animations.py`; `build(calf)` returns the 3 names). Standalone: `python3 tools/clips/actions.py [--no-render] [--only Death,...]` builds on `build/stage_b.blend`, prints the QA below, saves `<scratchpad>/actions/test.blend` (falls back to `build/clip_tests/actions/`) and renders strips + GIFs (~4 min with renders, ~5 s without).
+| Clip | Frames | Content |
+|---|---|---|
+| `Death` | 70, no root motion | Pose() → flinch (head up, ears back, tail clamps, f0-4) → sway right with a right-fore (f5-11) and right-hind (f11-18) stagger step → fore legs buckle (carpi fold forward, chest drops, f12-27) → topples onto its **right** side with gravity acceleration (roll 13° f22 → 87° impact f35), legs lose tension from f22-26 and are carried out to its left → small bounce/roll-back, head hits the ground f38 and bounces, ears flop → right-hind reflex stretch f41-52 → `dead_pose()` held exactly f60-70. As in the GiM reference (26.8-27.5 s: falls onto its right side, legs out, head down). |
+| `Leap` | 40, root motion 1.447 m (-Y) | crouch with weight back (hips -8 cm, f0-7) → fore feet lift first (f7/f8) and tuck (carpus ≤114°) → explosive hind push (body 0 → 2.7 m/s f8-14) → hind take-off f13/f14 → ballistic flight f14-24 (g = 9.81, apex +9 cm body, ~30 cm hoof clearance), head up/extended like the reference gallop, **buck**: hind legs kicked out back and up (f18-24, rump twist) → fore feet reach and land f24/f25 → body vaults over the fore legs while the rear drops (pitch +12° → -3°) → hind feet land f29/f30 → absorb → Pose() at the new root. |
+| `HeadShake` | 36 | head dips → 2.5 shake cycles (7-frame period ≈ 4.3 Hz; head roll ±30°, yaw ±9°) that start at the withers/neck base and travel to the head (0.3-1.8 f lag), ears flap ±38° with ~1/4-period lag (anti-phase L/R), loose jaw, tail flick f8-28, ear flick f24 → Pose(). |
+
+**How:**
+- Per-channel Hermite curves (`Curve`: monotone Fritsch-Carlson slopes, or explicit in/out slopes for impacts; `VCurve` per component), `hermite_path` for foot swings. Boundary frames return the shared poses verbatim (`stand_pose()`, `stand_pose(root)`, `dead_pose(calf)`); residuals of the raw curves there are ≤6e-8.
+- `make_clip_ex` = `Calf.make_clip` (no reach pass) + a per-frame basis hook. Death uses it to turn the **hoof bones with the trunk** once a leg goes limp: anim_lib keeps hooves upright (root yaw + flex only), so on its side the hooves would stick up. The IK targets only the hoof bone head, so re-orienting it about the head does not change the solve.
+- Death limp legs: foot target = lerp(planted world position, dead foot carried by the trunk (leg-parent frame Torso2/Back), detach weight); fetlock height clamped so the rotated hoof (Calf_LOD2 hoof verts) never goes below its rest height.
+- Leap: world-space foot planner. Root = COG path integrated from a speed curve (`LEAP_V`); planted feet are fixed world points; swings are Hermite paths in the root frame with **world velocity ~0 at touch-down** (the hoof retracts at body speed) and a toe-off tangent at lift-off; keys can be timed as fraction of the swing, frames after lift-off or frames before touch-down.
+
+**Gotchas (useful for other families):**
+- Conventions checked by FK probes + renders: `flex` + = toe back; `ears` x + = tip forward, y + = tip down, z twist; head roll + = left ear down; body roll + = right side down; **spine roll + = LEFT side down**; **tail side + = tip toward the calf's RIGHT (-X)** (the Pose docstring says left).
+- Front leg reach: `top_rot` barely moves the elbow (`FrontShoulder` is a 4 cm bone at the elbow). Use `glide` (or `auto_top`) to move the elbow.
+- Lying on the side: the lower ear points straight into the ground (-12 cm) unless folded back (`R = (-50, -40, 0)`). The upper ear base sits ~25 cm up.
+- Leap reach budget (hip→fetlock ≤ ~0.636 m with `auto_top`): the COG may travel only ~0.26 m before the hind feet leave. A fore foot landing 0.27 m ahead at 2.7 m/s needs a nose-down, low front end at touch-down (with a ~2 cm reach clamp for 2-3 airborne frames on the lead fore). After touch-down the elbow must follow the vault arc of a nearly straight leg, otherwise the carpus folds 100°+ (cattle carpi lock under load). Keys were derived from elbow/hip height targets.
+- The hind hooves must rise with the hips right after take-off (the leg is at full extension), otherwise they are clamped for several frames.
+
+**QA** (`python3 tools/clips/actions.py`, build/stage_b.blend after the hoof-sole / weight-smoothing rebuild):
+| Clip | IK gap | Planted slide | Planted hoof vs rest | Non-hoof min z (LOD2) | Carpus / hock bend | Worst planted reach excess |
+|---|---|---|---|---|---|---|
+| Death | 0.04 mm | 0.01 mm | ≤2.1 mm (Pose() clamp) | -1.51 cm (f35 impact, head/ear); dead pose -0.11 cm; head 0.26 cm | 15-143° / 52-111° | 3 mm (f0 = Pose() clamp) |
+| Leap | 0.03 | 0.01 | ≤2.1 | 2.60 cm (= rest) | 15-114° / 15-118° | 3 mm (Pose() clamp) |
+| HeadShake | 0.00 | 0.00 | ≤2.1 | 2.60 cm | 15° / 52° | 3 mm |
+- All clips start at Pose() (0.0000 mm / 0.0000°); Leap and HeadShake end at Pose() root-relative (≤0.0007 mm). Death f60 = f70 exactly. Carpus/hock bends are positive (anatomical) on every frame; Death measures them in the trunk frame so they stay meaningful on the side. Hoof min z never goes below rest (-0.31 cm vs -0.12 rest in Death).
+- Largest per-frame rotation 2nd differences (intended): Death Body 7.4°/f² at the impact (f35); Leap FrontLowerLeg.L 47.6°/f² at the lead fore touch-down (f24; the hoof comes in 5 cm/frame and stops) and IKBackLeg.R 96 mm/f² at the hind take-off (f14); HeadShake Head 27.8°/f² (a ±30° 4.3 Hz shake is ~24°/f² by itself), ears ≤35.8°/f².
+- `calf.qa` "fetlock loop seam" is meaningless for these non-loop clips (Death 394 mm = the calf ends lying down).
+
+**Open:**
+- Death has no root motion (the body ends 0.30 m to the calf's right of the Root). If gameplay needs the capsule to follow, add a Root drift.
+- The lead fore (LF) is reach-clamped by up to 2.3 cm for 2-3 airborne frames before touch-down, and its hoof arrives with 5 cm/frame then stops (a hoof "slap"). Reducing the leap speed (2.7 m/s) would soften this.
+- No in-place variant of Leap was made (root motion only).
+- Lower-leg crossing on the side and tail contact were checked visually only (the tail rests ≥9 cm up on the thighs, no clearance metric).

@@ -88,13 +88,12 @@ def bump(f, a, p, b):
 
 
 def flick(f, f0, up=3.0, down=9.0):
-    """quick twitch: fast ease-out rise over `up` frames, slower settle over `down` frames"""
+    """quick twitch: eased rise over `up` frames (no velocity jump at the start), slower settle over `down`"""
     t = f - f0
     if t <= 0 or t >= up + down:
         return 0.0
     if t < up:
-        u = t / up
-        return 1 - (1 - u) ** 2
+        return smooth(t / up)
     return 1.0 - smooth((t - up) / down)
 
 
@@ -209,10 +208,6 @@ def add_tail_wave(P, amp_side, phase, lift=0.0, lag=0.07):
                      l + lift * (1.0 - 0.1 * i))
 
 
-def rest_foot(calf, leg):
-    return calf.rest_head(LEGS[leg]["foot"])
-
-
 def body_rot_matrix(P):
     """rotation (3x3, armature space) the body gets from root yaw + body_rot (same maths as anim_lib)"""
     pr, rr, yr = (math.radians(v) for v in P.body_rot)
@@ -279,11 +274,36 @@ def stand_pose(root=None):
 
 
 _REST_FEET = {}      # filled by _init(calf): leg -> rest fetlock position
+_HOOF_PTS = {}       # leg -> hoof vertices of Calf_LOD2 relative to the rest fetlock (ground clamp of limp feet)
 
 
 def _init(calf):
     for leg, d in LEGS.items():
         _REST_FEET[leg] = calf.rest_head(d["foot"])
+    ob = bpy.data.objects["Calf_LOD2"]
+    me = ob.data
+    fp = np.zeros(len(me.polygons), np.int32)
+    me.attributes["orig_part"].data.foreach_get("value", fp)
+    idx = sorted({v for p in me.polygons if fp[p.index] == 2 for v in p.vertices})
+    Mw = ob.matrix_world
+    for leg in LEGS:
+        pts = [Mw @ me.vertices[i].co for i in idx]
+        pts = [p for p in pts if (p.x > 0) == (leg[0] == "L") and (p.y < 0) == (leg[1] == "F")]
+        _HOOF_PTS[leg] = [p - _REST_FEET[leg] for p in pts]
+
+
+def hoof_delta(Rb, flex, w):
+    """world rotation (delta from rest) of a hoof: upright + flex (planted, anim_lib) slerped toward the trunk
+    orientation Rb + flex (limp leg, follows the body) by w"""
+    fq = Quaternion(Vector((1, 0, 0)), math.radians(flex))
+    return fq.slerp(Rb @ fq, w)
+
+
+def hoof_floor(leg, q):
+    """lowest fetlock height that keeps the hoof (rotated by q) no lower than it sits at rest"""
+    zs = [(q @ p).z for p in _HOOF_PTS[leg]]
+    rest_low = min(p.z for p in _HOOF_PTS[leg])
+    return _REST_FEET[leg].z + rest_low - min(zs)
 
 
 # ---------------------------------------------------------------------------- DEAD (end of Death)
@@ -294,14 +314,18 @@ DEAD = dict(
     body_rot=V(2.0, 88.0, -4.0),
     spine={"Back": (0.0, 3.0, 0.0), "Torso": (0.0, 2.0, 0.0), "Torso3": (4.0, -3.0, 0.0)},
     neck=[8.0, 8.0, 6.0],
-    neck_yaw=[-6.0, -8.0, -8.0],
-    head=V(8.0, -8.0, 0.0),
+    neck_yaw=[-2.0, -3.0, -3.0],
+    head=V(8.0, -4.0, 0.0),                     # right cheek on the ground
     jaw=6.0,
-    ears={"L": V(-10.0, 35.0, 0.0), "R": V(-10.0, 30.0, 0.0)},
-    tail=[(14.0, -6.0), (10.0, 0.0), (6.0, 0.0), (3.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)],
-    feet={"LF": V(0.14, -0.60, 0.11), "RF": V(0.20, -0.56, 0.04),
-          "LH": V(0.16, 0.58, 0.12), "RH": V(0.18, 0.63, 0.04)},
+    # the lower (right) ear would point straight into the ground: folded back and up (flat on the ground);
+    # the upper (left) ear lies back along the neck
+    ears={"L": V(-75.0, -20.0, 0.0), "R": V(-50.0, -40.0, 0.0)},
+    tail=[(34.0, -5.0), (22.0, 0.0), (10.0, 0.0), (5.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)],
+    # lower (right) legs lie on the ground; upper (left) legs drop onto / in front of them
+    feet={"LF": V(0.08, -0.62, 0.07), "RF": V(0.20, -0.56, 0.04),
+          "LH": V(0.12, 0.60, 0.07), "RH": V(0.18, 0.63, 0.04)},
     flex={"LF": 25.0, "RF": 20.0, "LH": 20.0, "RH": 15.0},
+    glide={"LF": 0.04, "RF": 0.0},
     top_rot={"LF": (-12.0, 0.0, 0.0), "RF": (-6.0, 0.0, 0.0)},
     femur={"LH": -8.0, "RH": -14.0},
 )
@@ -319,81 +343,79 @@ def dead_pose(calf):
     P.tail = list(DEAD["tail"])
     P.feet = {leg: DEAD["feet"][leg] - _REST_FEET[leg] for leg in LEGS}
     P.flex = dict(DEAD["flex"]); P.top_rot = dict(DEAD["top_rot"]); P.femur = dict(DEAD["femur"])
+    P.glide = dict(DEAD["glide"])
     return P
 
 
 # ============================================================================== Death
-DEATH_N = 72
-DEATH_HOLD = 62
-D_STEPS = {"RF": (8, 15, V(-0.06, -0.03, 0.0)), "RH": (15, 22, V(-0.05, 0.02, 0.0))}   # stagger steps
-D_DETACH = {"LF": (28, 38), "RF": (29, 39), "LH": (31, 41), "RH": (32, 42)}       # legs lose tension
+DEATH_N = 70
+DEATH_HOLD = 60
+D_STEPS = {"RF": (5, 11, V(-0.06, -0.03, 0.0)), "RH": (11, 18, V(-0.05, 0.02, 0.0))}   # stagger steps
+D_DETACH = {"LF": (22, 32), "RF": (23, 33), "LH": (25, 34), "RH": (26, 35)}       # legs lose tension
 
 
 def death_channels():
     dx, dy, dz = DEAD["body_off"]
     dp, dr, dyaw = DEAD["body_rot"]
+    H = DEATH_HOLD
     C = {}
-    C["bx"] = Curve([(0, 0.0), (5, 0.006), (14, -0.02), (24, -0.045), (29, -0.07), (36, -0.16), (41, -0.26),
-                     (46, dx - 0.006), (DEATH_HOLD, dx)])
-    C["by"] = Curve([(0, 0.0), (4, 0.012), (12, 0.004), (24, -0.02), (34, -0.01), (44, dy), (DEATH_HOLD, dy)])
-    # gravity: slow start of the topple, fastest just before the impact (f42), small bounce, settle
-    C["bz"] = Curve([(0, 0.0), (4, -0.004), (12, -0.03), (20, -0.07), (28, -0.13), (33, -0.20), (38, -0.33),
-                     (42, dz, -0.035, 0.0), (45, dz + 0.015), (49, dz - 0.002), (53, dz), (DEATH_HOLD, dz)])
-    C["pitch"] = Curve([(0, 0.0), (4, -2.0), (12, 2.0), (22, 10.0), (29, 12.0), (38, 7.0), (44, dp),
-                        (DEATH_HOLD, dp)])
-    C["roll"] = Curve([(0, 0.0), (5, -1.0), (13, 4.0), (21, 8.0), (28, 15.0), (33, 30.0), (38, 57.0),
-                       (42, dr - 1.0, 8.5, 0.5), (45, dr + 3.0), (50, dr - 0.8), (55, dr), (DEATH_HOLD, dr)])
-    C["yaw"] = Curve([(0, 0.0), (14, -1.5), (30, -3.0), (44, dyaw), (DEATH_HOLD, dyaw)])
-    # head/neck: flinch up (f3), sag with the stagger, drop with the buckle, lag while the body falls, whip
-    # down to the ground just after the body lands (f45), bounce, settle
-    C["neck"] = VCurve([(0, [0.0, 0.0, 0.0]), (3, [-3.0, -5.0, -5.0]), (12, [4.0, 6.0, 5.0]),
-                        (24, [10.0, 12.0, 10.0]), (34, [2.0, 2.0, 0.0]), (40, [-2.0, -3.0, -4.0]),
-                        (45, [10.0, 10.0, 9.0]), (49, [6.0, 7.0, 5.0]), (54, DEAD["neck"]),
-                        (DEATH_HOLD, DEAD["neck"])])
-    C["neck_yaw"] = VCurve([(0, [0.0, 0.0, 0.0]), (14, [1.0, 1.5, 2.0]), (30, [2.0, 3.0, 3.0]),
-                            (40, [1.0, 1.0, 0.0]), (45, [-8.0, -10.0, -10.0]), (49, [-5.0, -7.0, -7.0]),
-                            (54, DEAD["neck_yaw"]), (DEATH_HOLD, DEAD["neck_yaw"])])
-    C["head"] = VCurve([(0, [0.0, 0.0, 0.0]), (3, [-6.0, 0.0, 0.0]), (12, [6.0, 2.0, -3.0]),
-                        (24, [10.0, 3.0, -4.0]), (36, [-2.0, 0.0, 0.0]), (45, [12.0, -10.0, 0.0]),
-                        (49, [6.0, -7.0, 0.0]), (54, list(DEAD["head"])), (DEATH_HOLD, list(DEAD["head"]))])
-    C["jaw"] = Curve([(0, 0.0), (3, 7.0), (10, 3.0), (24, 4.0), (40, 2.0), (45, 9.0), (52, DEAD["jaw"]),
-                      (DEATH_HOLD, DEAD["jaw"])])
+    C["bx"] = Curve([(0, 0.0), (4, 0.004), (10, -0.02), (18, -0.045), (23, -0.07), (29, -0.16), (34, -0.26),
+                     (39, dx - 0.006), (H, dx)])
+    C["by"] = Curve([(0, 0.0), (4, 0.004), (10, 0.002), (18, -0.02), (27, -0.01), (37, dy), (H, dy)])
+    # gravity: slow start of the topple, fastest just before the impact (f35), small bounce, settle
+    C["bz"] = Curve([(0, 0.0), (4, -0.012), (10, -0.03), (16, -0.07), (22, -0.13), (27, -0.21), (31, -0.33),
+                     (35, dz, -0.05, 0.0), (38, dz + 0.015), (42, dz - 0.002), (46, dz), (H, dz)])
+    C["pitch"] = Curve([(0, 0.0), (4, 0.5), (10, 2.0), (17, 9.0), (23, 11.0), (31, 7.0), (37, dp), (H, dp)])
+    C["roll"] = Curve([(0, 0.0), (4, 0.0), (10, 4.0), (16, 7.0), (22, 13.0), (27, 28.0), (31, 55.0),
+                       (35, dr - 1.0, 9.0, 0.5), (38, dr + 3.0), (43, dr - 0.8), (48, dr), (H, dr)])
+    C["yaw"] = Curve([(0, 0.0), (10, -1.5), (24, -3.0), (37, dyaw), (H, dyaw)])
+    # head/neck: flinch up (f3), sags with the stagger, stays up while the chest drops (the body pitches it
+    # down), lags up while the body falls, hits the ground just after the body (f38), bounce, settle
+    C["neck"] = VCurve([(0, [0.0, 0.0, 0.0]), (3, [-3.0, -5.0, -5.0]), (10, [2.0, 3.0, 2.0]),
+                        (18, [0.0, -2.0, -3.0]), (26, [-2.0, -4.0, -5.0]), (33, [-3.0, -5.0, -6.0]),
+                        (38, [9.0, 9.0, 7.0]), (42, [6.0, 6.0, 5.0]), (47, DEAD["neck"]), (H, DEAD["neck"])])
+    C["neck_yaw"] = VCurve([(0, [0.0, 0.0, 0.0]), (10, [1.0, 1.5, 2.0]), (24, [2.0, 3.0, 3.0]),
+                            (33, [1.0, 1.0, 0.0]), (38, [-2.5, -3.5, -3.5]), (42, [-1.0, -1.5, -1.5]),
+                            (47, DEAD["neck_yaw"]), (H, DEAD["neck_yaw"])])
+    C["head"] = VCurve([(0, [0.0, 0.0, 0.0]), (3, [-6.0, 0.0, 0.0]), (10, [4.0, 2.0, -3.0]),
+                        (18, [2.0, 3.0, -4.0]), (29, [-4.0, 0.0, 0.0]), (38, [9.0, -5.0, 0.0]),
+                        (42, [6.0, -2.0, 0.0]), (47, list(DEAD["head"])), (H, list(DEAD["head"]))])
+    C["jaw"] = Curve([(0, 0.0), (3, 7.0), (9, 3.0), (18, 4.0), (33, 2.0), (38, 9.0), (45, DEAD["jaw"]),
+                      (H, DEAD["jaw"])])
     eL, eR = DEAD["ears"]["L"], DEAD["ears"]["R"]
-    C["earL"] = VCurve([(0, [0.0, 0.0, 0.0]), (3, [-28.0, -6.0, 8.0]), (12, [-18.0, 10.0, 4.0]),
-                        (26, [-12.0, 22.0, 0.0]), (38, [-4.0, 6.0, 0.0]), (44, [-6.0, 48.0, 0.0]),
-                        (50, [-12.0, 28.0, 0.0]), (55, list(eL)), (DEATH_HOLD, list(eL))])
-    C["earR"] = VCurve([(0, [0.0, 0.0, 0.0]), (3, [-26.0, -6.0, 8.0]), (12, [-16.0, 12.0, 4.0]),
-                        (26, [-10.0, 24.0, 0.0]), (38, [-2.0, 4.0, 0.0]), (44, [-8.0, 44.0, 0.0]),
-                        (50, [-12.0, 25.0, 0.0]), (55, list(eR)), (DEATH_HOLD, list(eR))])
+    C["earL"] = VCurve([(0, [0.0, 0.0, 0.0]), (3, [-28.0, -6.0, 8.0]), (10, [-18.0, 10.0, 4.0]),
+                        (20, [-12.0, 22.0, 0.0]), (31, [-20.0, 0.0, 0.0]), (37, [-50.0, 10.0, 0.0]),
+                        (42, [-66.0, -30.0, 0.0]), (48, list(eL)), (H, list(eL))])
+    C["earR"] = VCurve([(0, [0.0, 0.0, 0.0]), (3, [-26.0, -6.0, 8.0]), (10, [-16.0, 12.0, 4.0]),
+                        (20, [-10.0, 24.0, 0.0]), (31, [-22.0, -8.0, 0.0]), (36, [-45.0, -35.0, 0.0]),
+                        (41, [-56.0, -32.0, 0.0]), (48, list(eR)), (H, list(eR))])
     tail_dead = [c for seg in DEAD["tail"] for c in seg]
     clamp = [0.0, -12.0, 0.0, -6.0, 0.0, -2.0] + [0.0] * 8
-    C["tail"] = VCurve([(0, [0.0] * 14), (4, clamp), (14, [2.0, -8.0, 3.0, -3.0, 3.0, 0.0] + [2.0, 0.0] * 4),
-                        (30, [4.0, -4.0] + [2.0, 0.0] * 6), (44, tail_dead), (DEATH_HOLD, tail_dead)], size=14)
-    # spine: shared DEAD values from the impact on
-    C["spine"] = {b: VCurve([(0, [0.0, 0.0, 0.0]), (30, [0.0, 0.0, 0.0]), (46, list(v)), (DEATH_HOLD, list(v))])
+    C["tail"] = VCurve([(0, [0.0] * 14), (4, clamp), (12, [2.0, -8.0, 3.0, -3.0, 3.0, 0.0] + [2.0, 0.0] * 4),
+                        (24, [4.0, -4.0] + [2.0, 0.0] * 6), (37, tail_dead), (H, tail_dead)], size=14)
+    # spine / leg tops (explicit, auto_top off): reach the DEAD values just after the impact
+    C["spine"] = {b: VCurve([(0, [0.0, 0.0, 0.0]), (24, [0.0, 0.0, 0.0]), (39, list(v)), (H, list(v))])
                   for b, v in DEAD["spine"].items()}
-    # leg tops (explicit, auto_top off): scapulae swing forward / femurs back as the legs go limp
-    C["top"] = {leg: VCurve([(0, [0.0, 0.0, 0.0]), (30, [0.0, 0.0, 0.0]), (46, list(v)), (DEATH_HOLD, list(v))])
+    C["top"] = {leg: VCurve([(0, [0.0, 0.0, 0.0]), (24, [0.0, 0.0, 0.0]), (39, list(v)), (H, list(v))])
                 for leg, v in DEAD["top_rot"].items()}
-    C["femur"] = {leg: Curve([(0, 0.0), (8, 0.0), (22, 4.0), (32, 6.0), (46, v - 6.0), (50, v - 9.0),
-                              (56, v), (DEATH_HOLD, v)]) for leg, v in DEAD["femur"].items()}
+    C["glide"] = {leg: Curve([(0, 0.0), (24, 0.0), (39, v), (H, v)]) for leg, v in DEAD["glide"].items()}
+    C["femur"] = {leg: Curve([(0, 0.0), (6, 0.0), (17, 4.0), (26, 6.0), (39, v - 6.0), (43, v - 9.0),
+                              (49, v), (H, v)]) for leg, v in DEAD["femur"].items()}
     return C
 
 
 def death_fn(calf):
-    """returns (N, pose fn, planted fn, basis hook)"""
+    """returns (N, pose fn, planted fn, basis hook, raw pose fn)"""
     N = DEATH_N
     C = death_channels()
     dead = dead_pose(calf)
     dead_frames = leg_frames(calf, dead)
     # dead feet in each leg-parent's rest space (carried by the trunk while the leg is limp)
     local_dead = {leg: dead_frames[leg].inverted() @ DEAD["feet"][leg] for leg in LEGS}
-    # last planted position (after the stagger step)
-    planted_at = {leg: _REST_FEET[leg] + (D_STEPS[leg][2] if leg in D_STEPS else V()) for leg in LEGS}
 
     def detach(leg, f):
         a, b = D_DETACH[leg]
-        return ramp(f, a, b, lambda t: smooth(t) ** 1.0)
+        return ramp(f, a, b)
 
     def base(f):
         P = Pose()
@@ -411,11 +433,14 @@ def death_fn(calf):
             P.top_rot[leg] = tuple(c(f))
         for leg, c in C["femur"].items():
             P.femur[leg] = c(f)
+        for leg, c in C["glide"].items():
+            P.glide[leg] = c(f)
         return P
 
     def raw(f):
         P = base(f)
         frames = leg_frames(calf, P)
+        Rb = body_rot_matrix(P).to_quaternion()
         for leg in LEGS:
             # planted (with the stagger step)
             w0 = _REST_FEET[leg].copy()
@@ -426,17 +451,19 @@ def death_fn(calf):
                     w0 = w0 + off
                 elif f > a:
                     s = (f - a) / float(b - a)
-                    h = math.sin(math.pi * s ** 0.85) ** 1.5
+                    h = 16.0 * s * s * (1.0 - s) * (1.0 - s)        # lift bell: zero speed at lift-off/touch-down
                     w0 = w0 + off * smoother(s) + V(0, 0, 0.045 * h)
-                    fl0 = 50.0 * h * h
+                    fl0 = 40.0 * h * h
             w = detach(leg, f)
             carried = frames[leg] @ local_dead[leg]
             p = w0.lerp(carried, w)
-            p.z = max(p.z, 0.036 if w > 0 else p.z)
-            P.feet[leg] = p - _REST_FEET[leg]
             P.flex[leg] = fl0 * (1 - w) + DEAD["flex"][leg] * w
+            if w > 0:
+                # limp foot: keep the (turned) hoof and the fetlock skin above the ground
+                p.z = max(p.z, hoof_floor(leg, hoof_delta(Rb, P.flex[leg], w)), 0.035)
+            P.feet[leg] = p - _REST_FEET[leg]
         # last stretch of the lower hind leg after the impact (reflex), then limp
-        k = bump(f, 47, 51, 58)
+        k = bump(f, 41, 45, 52)
         if k:
             P.feet["RH"] = P.feet["RH"] + V(0.0, 0.06, 0.0) * k
             P.flex["RH"] += 25.0 * k
@@ -465,13 +492,8 @@ def death_fn(calf):
             if w <= 0.0:
                 continue
             fb = LEGS[leg]["foot"]
-            M = pose[fb]
-            h = M.translation.copy()
-            Rp = M.to_quaternion()                       # planted orientation (flex about world X)
-            rest_q = calf.rest[fb].to_quaternion()
-            flex_q = Rp @ rest_q.inverted()              # world-space delta = yaw + flex
-            target = (Rb @ flex_q) @ rest_q
-            q = Rp.slerp(target, w)
+            h = pose[fb].translation.copy()
+            q = hoof_delta(Rb, P.flex.get(leg, 0.0), w) @ calf.rest[fb].to_quaternion()
             Mn = Matrix.Translation(h) @ q.to_matrix().to_4x4()
             B[fb] = calf.basis_for(fb, pose, Mn)
 
@@ -479,11 +501,13 @@ def death_fn(calf):
 
 
 # ============================================================================== Leap
-LEAP_N = 42
-# forward speed of the body (m/s), integrated to the root path
-LEAP_V = [(0, 0.0), (4, 0.0), (9, 0.8), (14, 2.8), (19, 2.9), (24, 2.75), (27, 1.5), (31, 0.6), (36, 0.15),
-          (42, 0.0)]
-LEAP_FEET = {"LF": (9, 24), "RF": (10, 25), "LH": (14, 29), "RH": (15, 30)}     # lift-off, touch-down
+LEAP_N = 40
+# forward speed of the body (m/s), integrated to the root path: still while crouching, explosive hind push
+# (f8-14, ~1.4 g), ballistic flight (constant), hard braking on the fore legs after the front touch-down
+LEAP_V = [(0, 0.0), (7, 0.0), (8, 0.1), (11, 1.3), (14, 2.7), (24, 2.7), (26, 1.5), (28, 0.7), (31, 0.2),
+          (35, 0.03), (40, 0.0)]
+LEAP_FEET = {"LF": (7, 24), "RF": (8, 25), "LH": (13, 29), "RH": (14, 30)}     # lift-off, touch-down
+LEAP_T0, LEAP_T1 = 14, 24          # flight: last hind lift-off .. first front touch-down
 
 
 def leap_root():
@@ -504,46 +528,61 @@ def leap_fn(calf):
     D = s[-1]
     rootp = lambda f: V(0.0, -s[int(f)], 0.0)
     C = {}
-    C["by"] = Curve([(0, 0.0), (5, 0.03), (10, 0.02), (15, 0.0), (N, 0.0)])
-    # ballistic flight f14..24 (g = 9.81 m/s^2), apex ~ +15 cm
+    C["by"] = Curve([(0, 0.0), (5, 0.02), (9, 0.015), (14, 0.0), (N, 0.0)])
+    # ballistic flight (g = 9.81 m/s^2) between LEAP_T0 and LEAP_T1, same height at both ends
     g = 9.81 / FPS / FPS
-    z0, z1, t0, t1 = 0.03, 0.0, 14.0, 24.0
+    t0, t1 = float(LEAP_T0), float(LEAP_T1)
+    z0, z1 = -0.035, -0.05
     vz = (z1 - z0 + 0.5 * g * (t1 - t0) ** 2) / (t1 - t0)
+
     def flight(f):
         t = f - t0
         return z0 + vz * t - 0.5 * g * t * t
-    C["bz_pre"] = Curve([(0, 0.0), (6, -0.045), (10, -0.02), (14, z0, vz)])
-    C["bz_post"] = Curve([(24, z1, vz - g * 10, -0.01), (27, -0.06), (31, -0.05), (36, -0.012), (N, 0.0)])
-    C["pitch"] = Curve([(0, 0.0), (6, -2.0), (10, -9.0), (14, -14.0), (19, -2.0), (23, 9.0), (25, 10.0),
-                        (28, 6.0), (31, 1.0), (36, -0.8), (N, 0.0)])
-    C["neck"] = VCurve([(0, [0.0] * 3), (6, [4.0, 4.0, 3.0]), (12, [-6.0, -8.0, -8.0]), (19, [-4.0, -6.0, -6.0]),
-                        (25, [2.0, 2.0, 2.0]), (29, [7.0, 8.0, 6.0]), (35, [1.0, 1.0, 0.0]), (N, [0.0] * 3)])
-    C["head"] = VCurve([(0, [0.0] * 3), (6, [4.0, 0.0, 0.0]), (13, [-10.0, 0.0, 0.0]), (20, [-6.0, 3.0, 4.0]),
-                        (26, [2.0, 0.0, 0.0]), (30, [6.0, 0.0, 0.0]), (36, [-1.0, 0.0, 0.0]), (N, [0.0] * 3)])
-    C["ears"] = VCurve([(0, [0.0] * 3), (6, [8.0, -4.0, 0.0]), (12, [-24.0, -6.0, 6.0]), (22, [-26.0, -2.0, 6.0]),
-                        (27, [-8.0, 22.0, 0.0]), (32, [-4.0, 4.0, 0.0]), (38, [2.0, -2.0, 0.0]), (N, [0.0] * 3)])
-    C["tail_lift"] = Curve([(0, 0.0), (8, 0.0), (15, 1.0), (24, 0.8), (32, 0.1), (N, 0.0)])
+    C["bz_pre"] = Curve([(0, 0.0), (5, -0.045), (8, -0.052), (11, -0.045), (t0, z0, vz)])
+    # landing: the fore legs meet the ground angled forward and the front end vaults up over them while the
+    # hind end keeps falling (pitch goes nose-down -> slightly nose-up), the hind legs land and absorb, level.
+    # Keys from elbow / hip height targets: elbow follows the vault arc of a nearly straight fore leg (cattle
+    # carpi lock under load: <~3 cm extra sink), hip falls ballistically until the hind touch-down (f29-30).
+    C["bz_post"] = Curve([(t1, z1, vz - g * (t1 - t0)), (25, -0.033), (26, -0.031), (27, -0.0355), (28, -0.040),
+                          (29, -0.043), (30, -0.044), (31, -0.041), (33, -0.031), (36, -0.013), (N, 0.0)])
+    C["pitch"] = Curve([(0, 0.0), (5, -6.0), (7, -6.5), (11, -11.0), (14, -14.0), (18, -3.0), (21, 7.5),
+                        (23, 12.5), (24, 12.5), (25, 6.0), (26, 1.7), (27, -0.7), (28, -2.3), (29, -3.1), (30, -3.35),
+                        (31, -3.2), (33, -2.1), (36, -1.0), (N, 0.0)])
+    C["neck"] = VCurve([(0, [0.0] * 3), (5, [4.0, 4.0, 3.0]), (11, [-6.0, -8.0, -8.0]), (18, [-4.0, -6.0, -6.0]),
+                        (24, [0.0, 0.0, 0.0]), (28, [3.0, 4.0, 3.0]), (34, [0.5, 0.5, 0.0]), (N, [0.0] * 3)])
+    C["head"] = VCurve([(0, [0.0] * 3), (5, [4.0, 0.0, 0.0]), (12, [-10.0, 0.0, 0.0]), (19, [-6.0, 3.0, 4.0]),
+                        (25, [1.0, 0.0, 0.0]), (29, [3.0, 0.0, 0.0]), (35, [-1.0, 0.0, 0.0]), (N, [0.0] * 3)])
+    C["ears"] = VCurve([(0, [0.0] * 3), (5, [8.0, -4.0, 0.0]), (11, [-24.0, -6.0, 6.0]), (21, [-26.0, -2.0, 6.0]),
+                        (26, [-8.0, 22.0, 0.0]), (31, [-4.0, 4.0, 0.0]), (36, [2.0, -2.0, 0.0]), (N, [0.0] * 3)])
+    C["tail_lift"] = Curve([(0, 0.0), (7, 0.0), (14, 1.0), (23, 0.8), (31, 0.1), (N, 0.0)])
     C["kick_twist"] = Curve([(0, 0.0), (15, 0.0), (19, 1.0), (24, 0.3), (29, 0.0), (N, 0.0)])
-    C["gain_f"] = Curve([(0, 1.0), (10, 1.0), (13, 0.6), (21, 0.6), (24, 1.0), (N, 1.0)])
+    C["gain_f"] = Curve([(0, 1.0), (8, 1.0), (12, 0.6), (19, 0.6), (22, 1.0), (N, 1.0)])
 
-    # swing paths (root-frame offsets from rest) with world-velocity 0 at lift-off / touch-down
+    # swing paths: keys (when, root-frame offset from rest, hoof flex); when = ("u", fraction of the swing),
+    # ("off", frames after lift-off) or ("td", frames before touch-down). World velocity 0 at lift-off and
+    # touch-down (the hoof leaves / meets the ground without sliding)
     swing_keys = {
-        "F": [(0.30, V(0.0, 0.10, 0.20), 90.0), (0.55, V(0.0, 0.02, 0.26), 115.0),
-              (0.80, V(0.0, -0.22, 0.13), 20.0)],
-        "H": [(0.25, V(0.0, 0.34, 0.14), 40.0), (0.45, V(0.0, 0.40, 0.24), 70.0), (0.62, V(0.0, 0.30, 0.22), 75.0),
-              (0.85, V(0.0, -0.02, 0.10), 45.0)],
+        "F": [(("u", 0.30), V(0.0, 0.10, 0.20), 90.0), (("u", 0.55), V(0.0, 0.02, 0.26), 115.0),
+              (("td", 3), V(0.0, -0.25, 0.08), 10.0)],
+        # hind: fully extended at take-off, the hooves first ride up with the rising hips (leg stays long), then
+        # the buck: kicked out back and up (f19-24), then swung forward under the body to land
+        "H": [(("off", 1), V(0.0, 0.285, 0.05), 20.0), (("off", 3), V(0.0, 0.29, 0.16), 45.0),
+              (("u", 0.45), V(0.0, 0.28, 0.28), 80.0), (("u", 0.62), V(0.0, 0.20, 0.30), 85.0),
+              (("u", 0.85), V(0.0, 0.02, 0.11), 45.0)],
     }
     paths, flexes = {}, {}
     for leg, (a, b) in LEAP_FEET.items():
         kind = leg[1]
-        vel_a = V(0.0, vel(a) / FPS, 0.0)
+        # lift-off: the hoof peels off upward (toe-off); the hind legs are at full extension when they leave, so
+        # their hooves must follow the rising hips at once (half the ground speed backward, 2.5 cm/f up)
+        vel_a = V(0.0, vel(a) / FPS, 0.012) if kind == "F" else V(0.0, 0.5 * vel(a) / FPS, 0.025)
         vel_b = V(0.0, vel(b) / FPS, -0.012)
         rel_a = V(0.0, s[a], 0.0)
         rel_b = V(0.0, s[b] - D, 0.0)
         keys = [(a, rel_a, vel_a)]
         fkeys = [(a, 0.0)]
-        for u, p, fl in swing_keys[kind]:
-            fr = a + u * (b - a)
+        for (mode, u), p, fl in swing_keys[kind]:
+            fr = {"u": a + u * (b - a), "off": a + u, "td": b - u}[mode]
             keys.append((fr, p, None)); fkeys.append((fr, fl))
         keys.append((b, rel_b, vel_b)); fkeys.append((b - 1, 0.0 if kind == "F" else 5.0)); fkeys.append((b, 0.0))
         paths[leg] = hermite_path(keys)
@@ -625,7 +664,7 @@ def headshake_fn(calf):
         # jaw loose during the shake
         P.jaw = 3.0 * env(f - 1) * (0.5 + 0.5 * math.sin(2 * math.pi * (f - 2) / T))
         # settle: ear flick after the shake (left), little head re-centre overshoot
-        k = flick(f, 26, 3, 8)
+        k = flick(f, 24, 3, 8)
         P.ears["L"] = P.ears["L"] + V(-22.0 * k, -8.0 * k, 12.0 * k)
         # tail flick: one quick swish during the shake
         sw = bump(f, 8, 14, 28)
@@ -923,8 +962,8 @@ def run_qa(calf, names):
 
 # ============================================================================== standalone
 RENDER = {  # clip -> (strip frames a:b:step, sides)
-    "Death": ("0:72:4", ("threequarter", "left")),
-    "Leap": ("0:42:3", ("left",)),
+    "Death": ("0:70:4", ("threequarter", "left")),
+    "Leap": ("0:40:2", ("left",)),
     "HeadShake": ("0:36:2", ("front",)),
 }
 
