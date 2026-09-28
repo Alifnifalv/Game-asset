@@ -68,6 +68,8 @@ class Pose:
     glide: dict = field(default_factory=dict)  # front leg -> scapula glide (m, + = forward)
     femur: dict = field(default_factory=dict)  # hind leg -> femur swing (deg, + = foot forward)
     top_rot: dict = field(default_factory=dict)  # leg -> (pitch, yaw, roll) extra on FrontShoulder/BackLeg (deg)
+    auto_top: bool = True        # aim scapula (front) / femur (hind) at the foot target (reach solver)
+    top_gain: dict = field(default_factory=lambda: {"F": 1.0, "H": 0.9})
 
 
 def blend_pose(a: Pose, b: Pose, t: float) -> Pose:
@@ -115,7 +117,28 @@ class Calf:
             pb.rotation_mode = "QUATERNION"
         self.cog = Vector((0, -0.05, 0.68))     # body pitch/roll pivot (m)
         self.pole_angle = {}
+        # virtual scapula pivots ~0.28 m above the elbow (dorsal third of the shoulder blade)
+        self.scap_pivot = {leg: self.rest_head(d["chain"][0]) + Vector((0, 0.05, 0.28))
+                           for leg, d in LEGS.items() if leg.endswith("F")}
+        self.chain_len = {leg: sum(self.bones[n].length for n in d["chain"]) for leg, d in LEGS.items()}
         self.withers = self.rest["Torso3"].translation.z + 0.3
+        # authoring speed: meshes don't need to deform while solving/baking
+        self.meshes = [o for o in bpy.data.objects if o.type == "MESH" and o.parent == self.arm]
+        self.set_mesh_eval(False)
+
+    def set_mesh_eval(self, on):
+        for o in self.meshes:
+            for m in o.modifiers:
+                if m.type == "ARMATURE":
+                    m.show_viewport = on
+
+    def save(self, path):
+        self.set_mesh_eval(True)
+        if self.arm.animation_data:
+            self.arm.animation_data.action = None
+        for pb in self.arm.pose.bones:
+            pb.matrix_basis = Matrix.Identity(4)
+        bpy.ops.wm.save_as_mainfile(filepath=path)
 
     # ---------------------------------------------------------------- FK maths
     def rel(self, n):
@@ -174,35 +197,68 @@ class Calf:
         for i, n in enumerate(TAIL):
             side, lift = P.tail[i]
             B[n] = (self.rot_about(n, Z, side) @ self.rot_about(n, X, lift)).to_matrix().to_4x4()
-        # scapula glide (front) / femur swing (hind) / extra top rotations
+        # feet targets (armature space) first: the leg tops aim at them
+        foot_M = {}
+        for leg, d in LEGS.items():
+            f = d["foot"]; h = self.rest_head(f)
+            flexR = Matrix.Rotation(math.radians(P.flex.get(leg, 0.0)), 4, "X")
+            if leg in P.feet_world:
+                foot_M[leg] = Matrix.Translation(P.feet_world[leg]) @ Matrix.Rotation(math.radians(P.root_yaw), 4, "Z") @ \
+                    flexR @ Matrix.Translation(-h) @ self.rest[f]
+            else:
+                off = P.feet.get(leg, Vector((0, 0, 0)))
+                foot_M[leg] = rootT @ Matrix.Translation(h + off) @ flexR @ Matrix.Translation(-h) @ self.rest[f]
+        pose = self.fk(B)
+        yawR = Matrix.Rotation(math.radians(P.root_yaw), 3, "Z")
+        side_axis = (bodyT.to_3x3() @ X).normalized()
+        inv_root = rootT.inverted()
+        def sag_angle(v):
+            """angle of v from straight down in the root frame's sagittal plane (+ = pointing forward/-Y)"""
+            w = inv_root.to_3x3() @ v
+            return math.atan2(-w.y, -w.z)
         for leg, d in LEGS.items():
             top = d["top"]
             m = Matrix.Identity(4)
+            parent_M = pose[self.par[top]] @ self.rel(top)            # top bone at identity basis
             if leg.endswith("F"):
                 g = P.glide.get(leg, 0.0)
                 m = Matrix.Translation(self.rest[top].to_3x3().inverted() @ Vector((0, -g, 0)))
+                if P.auto_top:
+                    piv = (parent_M @ self.rest[top].inverted()) @ self.scap_pivot[leg]
+                    foot = foot_M[leg].translation
+                    ang = sag_angle(foot - piv) - sag_angle(self.rest_head(d["foot"]) - self.scap_pivot[leg])
+                    R = Matrix.Translation(piv) @ Matrix.Rotation(-ang * P.top_gain["F"], 4, side_axis) @ Matrix.Translation(-piv)
+                    m = (parent_M.inverted() @ R @ parent_M) @ m
             else:
                 m = self.rot_about(top, X, -P.femur.get(leg, 0.0)).to_matrix().to_4x4()
+                if P.auto_top:
+                    hip = (parent_M @ self.rest[top].inverted()) @ self.rest_head(top)
+                    foot = foot_M[leg].translation
+                    ang = sag_angle(foot - hip) - sag_angle(self.rest_head(d["foot"]) - self.rest_head(top))
+                    R = Matrix.Translation(hip) @ Matrix.Rotation(-ang * P.top_gain["H"], 4, side_axis) @ Matrix.Translation(-hip)
+                    m = (parent_M.inverted() @ R @ parent_M) @ m
             if leg in P.top_rot:
                 pt, yw, rl = P.top_rot[leg]
                 m = m @ q_pyr(top, pt, yw, rl).to_matrix().to_4x4()
             B[top] = m
-        # feet (children of Root): position target + hoof flex about the fetlock
         pose = self.fk(B)
+        self._last_targets = {leg: foot_M[leg].translation.copy() for leg in LEGS}   # before clamping
+        self._last_roots = {leg: pose[d["chain"][0]].translation.copy() for leg, d in LEGS.items()}
         for leg, d in LEGS.items():
             f = d["foot"]
-            h = self.rest_head(f)
-            if leg in P.feet_world:
-                tgt = P.feet_world[leg]
-                M = Matrix.Translation(tgt) @ Matrix.Rotation(math.radians(P.root_yaw), 4, "Z") @ \
-                    Matrix.Rotation(math.radians(P.flex.get(leg, 0.0)), 4, "X") @ Matrix.Translation(-h) @ self.rest[f]
-            else:
-                off = P.feet.get(leg, Vector((0, 0, 0)))
-                M = rootT @ Matrix.Translation(h + off) @ Matrix.Rotation(math.radians(P.flex.get(leg, 0.0)), 4, "X") \
-                    @ Matrix.Translation(-h) @ self.rest[f]
-            B[f] = self.basis_for(f, pose, M)
+            # soft reach: never ask the chain for more than it has (only bites in swing; the body vault
+            # keeps planted feet reachable, so planted feet are not moved)
+            root = pose[d["chain"][0]].translation
+            v = foot_M[leg].translation - root
+            lim = 0.992 * self.chain_len[leg]
+            if v.length > lim:
+                M = foot_M[leg].copy(); M.translation = root + v.normalized() * lim
+                foot_M[leg] = M
+            B[f] = self.basis_for(f, pose, foot_M[leg])
             fl = P.flex.get(leg, 0.0)
             B[d["toe"]] = self.rot_about(d["toe"], X, 0.35 * fl).to_matrix().to_4x4()
+        self._last_pose = self.fk(B)
+        self._last_feet = {leg: foot_M[leg].translation.copy() for leg in LEGS}
         return B
 
     # ---------------------------------------------------------------- IK
@@ -257,59 +313,126 @@ class Calf:
                 pb.constraints.remove(c)
 
     # ---------------------------------------------------------------- clip writer
-    def make_clip(self, name, frames, pose_fn, keep_root=True, loop=True):
-        """pose_fn(frame) -> Pose for frame in 0..frames (inclusive). Writes action `name`."""
+    def new_action(self, name):
+        """empty Blender 5 layered action with one slot/layer/keyframe strip for CalfRig"""
         old = bpy.data.actions.get(name)
         if old: bpy.data.actions.remove(old)
         act = bpy.data.actions.new(name)
-        self.arm.animation_data_create()
-        self.arm.animation_data.action = act
-        cons = self.add_ik()
+        slot = act.slots.new(id_type="OBJECT", name="CalfRig")
+        layer = act.layers.new("Layer")
+        strip = layer.strips.new(type="KEYFRAME")
+        strip.channelbag(slot, ensure=True)
+        act.use_fake_user = True
+        return act
+
+    @staticmethod
+    def channelbag(act):
+        return act.layers[0].strips[0].channelbag(act.slots[0], ensure=True)
+
+    def use_action(self, act):
+        ad = self.arm.animation_data_create()
+        ad.action = act
+        if act.slots:
+            ad.action_slot = act.slots[0]
+
+    def write_curves(self, act, samples):
+        """samples: bone -> list over frames of (loc Vector, quat Quaternion). Replaces those bones' curves."""
+        cb = self.channelbag(act)
+        for n, rows in samples.items():
+            for dp in (f'pose.bones["{n}"].location', f'pose.bones["{n}"].rotation_quaternion'):
+                for fc in [fc for fc in cb.fcurves if fc.data_path == dp]:
+                    cb.fcurves.remove(fc)
+            prev = None
+            qs = []
+            for loc, q in rows:
+                q = q.copy()
+                if prev is not None and prev.dot(q) < 0: q.negate()
+                prev = q; qs.append(q)
+            nfr = len(rows)
+            for path, ncomp, get in ((f'pose.bones["{n}"].location', 3, lambda i, c: rows[i][0][c]),
+                                     (f'pose.bones["{n}"].rotation_quaternion', 4, lambda i, c: qs[i][c])):
+                for c in range(ncomp):
+                    fc = cb.fcurves.new(path, index=c, group_name=n)
+                    fc.keyframe_points.add(nfr)
+                    co = []
+                    for i in range(nfr): co += [float(i), float(get(i, c))]
+                    fc.keyframe_points.foreach_set("co", co)
+                    fc.keyframe_points.foreach_set("interpolation", [1] * nfr)   # LINEAR
+                    fc.update()
+
+    def reach_excess(self, P):
+        """per leg: how much farther the foot is than the leg chain can reach (m, >0 = unreachable)"""
+        self.pose_to_basis(P)
+        return {leg: (self._last_targets[leg] - self._last_roots[leg]).length - 0.99 * self.chain_len[leg]
+                for leg in LEGS}
+        return out
+
+    def reach_pass(self, poses, stance_fn, loop=True, iters=6, window=5):
+        """vault the body (height + pitch) so planted legs can reach their hooves; smooth over time"""
+        # a looping clip stores frame 0 again as its last frame: solve on the period, then copy
+        n = len(poses) - 1 if loop else len(poses)
+        ys = self.rest_head("FrontUpperLeg.L").y, self.rest_head("BackLeg.L").y
+        span = ys[1] - ys[0]
+        for _ in range(iters):
+            df, dh = [0.0] * n, [0.0] * n
+            for i, P in enumerate(poses[:n]):
+                ex = self.reach_excess(P)
+                for leg, e in ex.items():
+                    if e > 0 and stance_fn(leg, i):
+                        if leg.endswith("F"): df[i] = max(df[i], e)
+                        else: dh[i] = max(dh[i], e)
+            def dil_smooth(a):
+                m = len(a)
+                idx = lambda k: (k % m) if loop else min(m - 1, max(0, k))
+                dil = [max(a[idx(i + k)] for k in range(-window, window + 1)) for i in range(m)]
+                w = [math.exp(-0.5 * (k / (window / 2.0)) ** 2) for k in range(-window, window + 1)]
+                return [sum(w[k + window] * dil[idx(i + k)] for k in range(-window, window + 1)) / sum(w) for i in range(m)]
+            df, dh = dil_smooth(df), dil_smooth(dh)
+            if max(df + dh) < 1e-4: break
+            for i, P in enumerate(poses[:n]):
+                dz = -(df[i] + dh[i]) / 2.0 * 1.05
+                pitch = math.degrees(math.atan2(df[i] - dh[i], span)) * 1.05
+                P.body_off = P.body_off + Vector((0, 0, dz))
+                P.body_rot = P.body_rot + Vector((pitch, 0, 0))
+        if loop and len(poses) > n:
+            poses[-1].body_off = poses[0].body_off.copy(); poses[-1].body_rot = poses[0].body_rot.copy()
+        return poses
+
+    def make_clip(self, name, frames, pose_fn, loop=True, stance_fn=None):
+        """pose_fn(frame) -> Pose for frame in 0..frames (inclusive). Writes action `name` (all bones keyed).
+        stance_fn(leg, frame) -> bool enables the body-vault reach pass for planted legs."""
+        act = self.new_action(name)
+        poses = [pose_fn(f) for f in range(frames + 1)]
+        if stance_fn:
+            self.reach_pass(poses, stance_fn, loop=loop)
+        pose_fn = lambda f: poses[f]
         chain_bones = [n for d in LEGS.values() for n in d["chain"]]
-        keyed = [n for n in self.order if n not in chain_bones]
+        for pb in self.arm.pose.bones:
+            pb.matrix_basis = Matrix.Identity(4)
+        samples = {n: [] for n in self.order if n not in chain_bones}
         for f in range(frames + 1):
             B = self.pose_to_basis(pose_fn(f))
-            for n in keyed:
-                pb = self.arm.pose.bones[n]
-                m = B.get(n, Matrix.Identity(4))
-                loc, rot, scl = m.decompose()
-                pb.location, pb.rotation_quaternion, pb.scale = loc, rot, Vector((1, 1, 1))
-                pb.keyframe_insert("location", frame=f, group=n)
-                pb.keyframe_insert("rotation_quaternion", frame=f, group=n)
-        # evaluate IK per frame and bake the leg chains to FK
+            for n in samples:
+                loc, rot, _ = B.get(n, Matrix.Identity(4)).decompose()
+                samples[n].append((loc, rot))
+        self.write_curves(act, samples)
+        self.use_action(act)
+        self.add_ik()
+        self.use_action(act)
         baked = {n: [] for n in chain_bones}
         for f in range(frames + 1):
             self.sc.frame_set(f)
             dg = bpy.context.evaluated_depsgraph_get()
             ae = self.arm.evaluated_get(dg)
             for n in chain_bones:
-                pbe = ae.pose.bones[n]
                 par = ae.pose.bones[self.par[n]].matrix
-                local = (par @ self.rel(n)).inverted() @ pbe.matrix
-                baked[n].append(local.to_quaternion())
+                local = (par @ self.rel(n)).inverted() @ ae.pose.bones[n].matrix
+                baked[n].append((Vector((0, 0, 0)), local.to_quaternion()))
         self.remove_ik()
-        for n, qs in baked.items():
-            pb = self.arm.pose.bones[n]
-            prev = None
-            for f, q in enumerate(qs):
-                if prev is not None and prev.dot(q) < 0: q = -q
-                prev = q
-                pb.location, pb.rotation_quaternion = Vector((0, 0, 0)), q
-                pb.keyframe_insert("location", frame=f, group=n)
-                pb.keyframe_insert("rotation_quaternion", frame=f, group=n)
-        # quaternion hemisphere continuity + linear interpolation (every frame is keyed)
-        for l in act.layers:
-            for st in l.strips:
-                for cb in st.channelbags:
-                    for fc in cb.fcurves:
-                        for kp in fc.keyframe_points: kp.interpolation = "LINEAR"
-        self._fix_quat_flips(act)
-        if not keep_root:
-            self._strip_root(act)
+        self.write_curves(act, baked)
         act.use_frame_range = True
         act.frame_start, act.frame_end = 0, frames
         act.use_cyclic = loop
-        act.use_fake_user = True
         return act
 
     def _fix_quat_flips(self, act):
@@ -356,15 +479,15 @@ class Calf:
     # ---------------------------------------------------------------- QA
     def hoof_positions(self, act, frames):
         """world positions of the 4 fetlocks + hoof tips per frame"""
-        self.arm.animation_data.action = act
+        self.use_action(act)
         out = []
         for f in range(frames + 1):
             self.sc.frame_set(f)
             dg = bpy.context.evaluated_depsgraph_get(); ae = self.arm.evaluated_get(dg)
             row = {}
             for leg, d in LEGS.items():
-                row[leg] = (ae.matrix_world @ ae.pose.bones[d["foot"]].head, ae.matrix_world @ ae.pose.bones[d["toe"]].tail,
-                            ae.matrix_world @ ae.pose.bones[d["chain"][-1]].tail)
+                row[leg] = (ae.matrix_world @ ae.pose.bones[d["foot"]].head, ae.matrix_world @ ae.pose.bones[d["toe"]].head,
+                            ae.matrix_world @ ae.pose.bones[d["chain"][-1]].tail, ae.pose.bones["Root"].matrix.copy())
             out.append(row)
         return out
 
@@ -372,7 +495,7 @@ class Calf:
         """foot/IK gap, slide of planted feet, ground penetration, loop seam. planted_fn(leg, f)->bool"""
         rows = self.hoof_positions(act, frames)
         gap = max((r[l][2] - r[l][0]).length for r in rows for l in LEGS)
-        pen = min(r[l][1].z for r in rows for l in LEGS)
+        pen = min(r[l][1].z - self.rest_head(LEGS[l]["toe"]).z for r in rows for l in LEGS)
         slide = 0.0
         if planted_fn:
             for leg in LEGS:
@@ -383,8 +506,9 @@ class Calf:
                         slide = max(slide, (r[leg][0].xy - anchor.xy).length)
                     else:
                         anchor = None
-        seam = max((rows[0][l][0] - rows[-1][l][0]).length for l in LEGS)
-        print(f"QA {label or act.name}: IK gap {gap*1000:.2f} mm | min hoof tip z {pen*1000:.1f} mm | "
+        def rel_root(r, l): return r[l][3].inverted() @ r[l][0]
+        seam = max((rel_root(rows[0], l) - rel_root(rows[-1], l)).length for l in LEGS)
+        print(f"QA {label or act.name}: IK gap {gap*1000:.2f} mm | pastern drop below rest {pen*1000:.1f} mm | "
               f"planted slide {slide*1000:.2f} mm | fetlock loop seam {seam*1000:.2f} mm")
         return dict(gap=gap, pen=pen, slide=slide, seam=seam)
 

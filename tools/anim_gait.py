@@ -61,7 +61,7 @@ class Gait:
 
 
 # Calf: withers ~1.0 m, hip height ~0.72 m. Froude numbers v^2/(g*h): walk ~0.14, trot ~0.7, gallop ~2.6.
-WALK = Gait("Walk", frames=26, stride=0.86, duty=0.64,
+WALK = Gait("Walk", frames=24, stride=0.74, duty=0.62,
             offsets={"LH": 0.00, "LF": 0.25, "RH": 0.50, "RF": 0.75},   # lateral-sequence 4-beat walk
             lift={"LF": 0.085, "RF": 0.085, "LH": 0.065, "RH": 0.065},
             hoof_flex={"LF": 70, "RF": 70, "LH": 55, "RH": 55},
