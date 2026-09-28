@@ -75,3 +75,7 @@ Check tools:
 - Keep the tools deterministic and parameterised (`--in`/`--out`), because each stage is re-run when an earlier stage changes.
 - After each milestone, **append to `docs/WORKLOG.md`** (what changed, why, verification numbers, next steps) and commit.
 - Development branch: `claude/peaceful-lamport-fk2lw7`.
+- **Safe checkpoints (user rule):** whenever the repo reaches a verified-good state, commit, **push**, and add an annotated
+  tag `checkpoint-NN-<short-name>` (then `git push origin <tag>`). Verified-good means the full pipeline builds
+  (`tools/build_all.sh`), the validator reports 0 FAIL, the clip QA is clean, and the working tree is clean.
+  List every checkpoint in the "Checkpoints" table in `docs/WORKLOG.md`. To roll back: `git checkout <tag>`.
