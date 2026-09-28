@@ -80,6 +80,26 @@ add_region_group("Ear.R", ear_w(-1))
 REGION_GROUPS = ("Jaw", "Ear.L", "Ear.R")
 
 # ---------------------------------------------------------------------------------
+# 0b. hoof soles onto the ground: the source hooves sink below z=0 (front ~4.5 mm, hind ~12 mm at calf scale).
+#     Lift each foot by its foot-bone weight share so the sole sits exactly on z=0 (rigid on the hoof, fading up the pastern).
+def lift_feet():
+    part_a = me.attributes["orig_part"].data
+    hoof_v = {v for p in me.polygons if part_a[p.index].value == 2 for v in p.vertices}
+    for bones_, side_bones in ((("IKFrontLeg", "FF"), (".L", ".R")), (("IKBackLeg", "FFB"), (".L", ".R"))):
+        for sd in side_bones:
+            ids = {ob.vertex_groups[b + sd].index for b in bones_}
+            def wfoot(v): return sum(g.weight for g in v.groups if g.group in ids)
+            vs = [v for v in me.vertices if v.index in hoof_v and wfoot(v) > 0.5]
+            if not vs: continue
+            dz = -min(v.co.z for v in vs)
+            if dz <= 0: continue
+            for v in me.vertices:
+                w = wfoot(v)
+                if w > 0: v.co.z += dz * min(1.0, w)
+            print(f"feet {bones_[0]}{sd}: lifted {dz:.4f} (orig units)")
+lift_feet()
+
+# ---------------------------------------------------------------------------------
 # 1. fill udder hole (only boundary loop that is not an eye socket)
 bm = bmesh.new(); bm.from_mesh(me)
 part = bm.faces.layers.int.get("orig_part")

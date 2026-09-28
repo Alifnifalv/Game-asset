@@ -2,7 +2,8 @@
 
 Usage
   python3 tools/export_unity.py --in build/stage_d.blend --out-dir Unity/Calf [--tex-dir build/textures]
-          [--actions Eating,Idle] [--keep-helpers] [--max-influences 4] [--name Calf] [--no-glb] [--no-fbx]
+          [--actions Eating,Idle] [--keep-helpers] [--max-influences 4] [--weight-limit refit|truncate]
+          [--name Calf] [--no-glb] [--no-fbx] [--validate]
   (dev)  python3 tools/export_unity.py --in build/stage_b_snapshot_v1.blend --out-dir build/export_test
   then   python3 tools/validate_export.py --fbx <out>/Calf.fbx --glb <out>/Calf.glb --src <blend>
 
@@ -23,17 +24,34 @@ What the tool does to the in-memory copy before exporting
     actions are deleted from the session so no exporter can pick them up.  The pose is reset to rest, the active
     action is cleared and the NLA is rebuilt with one track + strip per action, named like the action.  The FBX
     exporter's "NLA strips" mode then writes one take per strip, *named after the strip*, baked while only that
-    strip is unmuted.  (Its "All Actions" mode also exports every slotted action in Blender 5, but it names the
-    takes "CalfRig|Eating"; channels an action does not key fall back to the rest pose in both modes -- the NLA
-    resets channels of muted strips to their defaults, and there is nothing else animated.)
+    strip is unmuted; channels a clip does not key come out at the rest pose.  The timeline is parked before all
+    strips so the FBX default (bind-time) node transforms are the rest pose, not a blend of every strip.
+    Blender 5 "All Actions" mode (--take-mode all_actions, diagnostic) does export every slotted action, but
+      - the takes are named "CalfRig|Eating" (and so are the Unity clips);
+      - unkeyed channels keep the pose captured at export start and unmuted NLA strips blend under every take: a
+        naive export from a file with an active action leaked 198 mm of head motion into the other take in a leak
+        test (tools/validate_export.py flags it); with the NLA off and the pose at rest the takes are exact;
+      - a naive export also writes the current frame's pose as the default pose and the armature node rotated.
   * Helper bones: the IK pole helpers (PoleTarget*, unweighted leaf bones; the IK constraints that used them are
     baked away) are dropped unless --keep-helpers is given.  They are flagged non-deforming and the exporters run
     in deform-bones-only mode, which still keeps every non-deforming *parent* of a deforming bone (e.g. Root).
-  * Skin weights: per vertex, zero weights and groups that are not exported bones are removed, the strongest
-    --max-influences (4) bone weights are kept (ties broken by bone name) and renormalised to sum to 1.
+  * Skin weights: zero weights and groups that are not exported deforming bones are removed and every vertex is
+    limited to --max-influences (4) bones with weights summing to 1.  The subdivided LODs have up to 7-8 influences
+    per vertex; plain truncation to the 4 strongest bones (what Unity's import does) moves some neck/shoulder
+    vertices by >1 cm when the head goes down.  Default --weight-limit refit: for each vertex over the limit, every
+    4-bone subset of its (8 strongest) influences gets the weights that best reproduce the original all-influence
+    deformation over <= --fit-frames poses sampled from all exported actions (least squares, sum = 1, >= 0, ridge
+    toward the truncated weights), and the subset with the smallest worst-pose error wins.  Max deviation from the
+    all-influence skin over every frame, LOD0: snapshot v1 (Eating/Idle) 12.97 mm truncated -> 2.37 mm refit;
+    stage D (10 clips incl. gallop) 40.8 -> 23.5 mm (99.9th percentile 22.3 -> 9.9 mm).  The residual sits on the
+    brisket midline, which the source weights split between both front legs; the real fix is to paint/limit those
+    weights at stage B.  --weight-limit truncate gives the plain behaviour.
   * Polygons with more than 4 corners (if any) are triangulated, because tangents can only be exported for tris
     and quads.  Quads are kept: the exported tangents are Blender's MikkTSpace tangents of the quad mesh, i.e. the
     exact basis the Cycles normal-map bake used (Unity: Tangents = Import).
+  * Material slots: M_Calf_Body is moved to the LAST slot of every LOD (source order: body, eye), so it is the last
+    submesh in Unity: Unity/Calf/Fur/CalfFur.cs appends shell-fur materials, which Unity draws on the last submesh.
+    Materials are remapped by name, so nothing else depends on the order (--keep-slot-order to disable).
   * Materials: images already used by the materials are re-pointed at the copies in <out>/Textures/.  If the
     materials have no image textures (stage B input) and --tex-dir holds the calf_textures.py outputs, a Principled
     network is wired from them (BaseColor, Normal, Roughness, AO -> glTF occlusion; eye BaseColor).
@@ -60,7 +78,6 @@ Axes and units (FBX)
 import argparse, json, math, os, re, shutil, sys, time
 
 import bpy
-from mathutils import Matrix
 from bpy_extras.io_utils import axis_conversion
 
 T0 = time.time()
@@ -174,14 +191,92 @@ def helper_bones(arm, lods, pattern):
     return [b.name for b in arm.data.bones if rx.search(b.name) and not b.children and b.name not in weighted]
 
 
-def limit_weights(obj, bone_names, max_inf):
+def skin_samples(arm, actions, bone_names, max_frames):
+    """armature-space skinning matrices (pose @ rest^-1, 3x4) of `bone_names` on frames sampled evenly from every
+    action (at most `max_frames` in total), evaluated like the exported takes: pose reset, one action at a time"""
+    import numpy as np
+    sc = bpy.context.scene
+    ad = arm.animation_data or arm.animation_data_create()
+    frames = [(act, f) for act in actions for f in range(int(act.frame_range[0]), int(act.frame_range[1]) + 1)]
+    if not frames:
+        return None
+    stride = max(1, int(math.ceil(len(frames) / float(max_frames))))
+    frames = frames[::stride]
+    hidden = [(o, o.hide_viewport) for o in bpy.data.objects if o.type == "MESH"]
+    for o, _ in hidden:
+        o.hide_viewport = True          # pose sampling without evaluating the meshes
+    use_nla, back = ad.use_nla, sc.frame_current
+    ad.use_nla = False
+    rest_inv = [arm.data.bones[n].matrix_local.inverted() for n in bone_names]
+    out, cur = np.empty((len(frames), len(bone_names), 3, 4)), None
+    for k, (act, f) in enumerate(frames):
+        if act is not cur:
+            ad.action = act
+            if act.slots:
+                ad.action_slot = act.slots[0]
+            reset_pose(arm)
+            cur = act
+        sc.frame_set(f)
+        for j, n in enumerate(bone_names):
+            out[k, j] = np.array(arm.pose.bones[n].matrix @ rest_inv[j])[:3]
+    ad.action = None
+    ad.use_nla = use_nla
+    reset_pose(arm)
+    sc.frame_set(back)
+    for o, h in hidden:
+        o.hide_viewport = h
+    return out
+
+
+def fit_four(p, S, w, max_inf, lam):
+    """Best <= max_inf bone subset + weights (sum 1, >= 0) reproducing the all-influence skinning of point p over the
+    sampled poses S (F, n, 3, 4):  min_u |A u - b|^2 + lam F |u - u0|^2,  u0 = truncated renormalised weights.
+    All subsets are solved at once (normal equations + sum-to-one KKT row); the subset with the smallest worst-pose
+    error wins."""
+    import itertools
+    import numpy as np
+    F, n = S.shape[0], S.shape[1]
+    X = np.einsum("fbij,j->bfi", S, np.r_[p, 1.0]).reshape(n, -1)      # (n, 3F) point moved by each bone
+    tgt = w @ X
+    G, c = X @ X.T, X @ tgt
+    subs = np.array(list(itertools.combinations(range(n), max_inf)))    # (m, k)
+    k = max_inf
+    u0 = w[subs] / w[subs].sum(1, keepdims=True)
+    Gs = G[subs[:, :, None], subs[:, None, :]]
+    K = np.zeros((len(subs), k + 1, k + 1))
+    K[:, :k, :k] = Gs + lam * F * np.eye(k)
+    K[:, :k, k] = 1.0
+    K[:, k, :k] = 1.0
+    rhs = np.concatenate([c[subs] + lam * F * u0, np.ones((len(subs), 1))], 1)
+    u = np.linalg.solve(K, rhs[..., None])[:, :k, 0]
+    neg = (u < 0).any(1)
+    if neg.any():
+        un = np.clip(u[neg], 0.0, None)
+        sm = un.sum(1, keepdims=True)
+        u[neg] = np.where(sm > 0, un / np.maximum(sm, 1e-12), u0[neg])
+    res = np.einsum("mk,mkq->mq", u, X[subs]) - tgt                       # (m, 3F) residuals
+    err = np.sqrt((res.reshape(len(subs), F, 3) ** 2).sum(2)).max(1)       # worst sampled pose per subset
+    b = int(np.argmin(err))
+    return float(err[b]), list(subs[b]), u[b]
+
+
+_WEIGHT_CACHE = {}
+
+
+def limit_weights(obj, arm, bone_names, max_inf, fit=None):
+    """<= max_inf influences per vertex, weights normalised.  Vertices over the limit are either truncated to their
+    strongest bones (fit=None) or refit (fit=(S, bone index, lam)): the bone subset and weights that best reproduce
+    the original all-influence deformation over the sampled animation poses."""
+    import numpy as np
     vgs = obj.vertex_groups
     names = [g.name for g in vgs]
     usable = [n in bone_names for n in names]
     st = {"verts": len(obj.data.vertices), "max_before": 0, "max_after": 0, "over_limit": 0,
-          "zero_or_foreign_removed": 0, "max_dropped_weight": 0.0, "unweighted": 0}
-    removals = {}
-    sets = []
+          "zero_or_foreign_removed": 0, "max_dropped_weight": 0.0, "unweighted": 0,
+          "method": "lsq-refit" if fit else "truncate"}
+    to_arm = arm.matrix_world.inverted() @ obj.matrix_world
+    removals, sets = {}, []
+    err_trunc, err_fit = [], []
     for v in obj.data.vertices:
         gs = [(g.group, g.weight) for g in v.groups]
         keep = [(gi, w) for gi, w in gs if w > 0.0 and usable[gi]]
@@ -191,7 +286,27 @@ def limit_weights(obj, bone_names, max_inf):
         if len(keep) > max_inf:
             st["over_limit"] += 1
             st["max_dropped_weight"] = max(st["max_dropped_weight"], sum(w for _, w in keep[max_inf:]) / tot)
-            keep = keep[:max_inf]
+            if fit is not None and (obj.name, v.index) in _WEIGHT_CACHE:
+                keep, et, ef = _WEIGHT_CACHE[(obj.name, v.index)]
+                err_trunc.append(et)
+                err_fit.append(ef)
+                keep = [(names.index(nm), w) for nm, w in keep]
+            elif fit is not None and fit[0] is not None:
+                S, bidx, lam = fit
+                cand = keep[:8]                   # C(8,4) = 70 subsets at most
+                w = np.array([x[1] for x in cand]) / sum(x[1] for x in cand)
+                Sv = S[:, [bidx[names[gi]] for gi, _ in cand]]
+                p = np.array(to_arm @ v.co)
+                e, sub, u = fit_four(p, Sv, w, max_inf, lam)
+                ut = w[:max_inf] / w[:max_inf].sum()
+                A = np.einsum("fbij,j->fbi", Sv, np.r_[p, 1.0])
+                full = np.einsum("b,fbi->fi", w, A)
+                err_trunc.append(float(np.linalg.norm(np.einsum("b,fbi->fi", ut, A[:, :max_inf]) - full, axis=1).max()))
+                err_fit.append(float(np.linalg.norm(np.einsum("b,fbi->fi", u, A[:, sub]) - full, axis=1).max()))
+                keep = [(cand[k][0], float(u[i])) for i, k in enumerate(sub) if u[i] > 0.0]
+                _WEIGHT_CACHE[(obj.name, v.index)] = ([(names[gi], w) for gi, w in keep], err_trunc[-1], err_fit[-1])
+            else:
+                keep = keep[:max_inf]
         s = sum(w for _, w in keep)
         if s <= 0.0:
             st["unweighted"] += 1
@@ -202,14 +317,36 @@ def limit_weights(obj, bone_names, max_inf):
                 removals.setdefault(gi, []).append(v.index)
                 if w <= 0.0 or not usable[gi]:
                     st["zero_or_foreign_removed"] += 1
-            elif target[gi] != w:
-                sets.append((gi, v.index, target[gi]))
+        for gi, w in target.items():
+            sets.append((gi, v.index, w))
         st["max_after"] = max(st["max_after"], len(target))
     for gi, idx in removals.items():
         vgs[gi].remove(idx)
     for gi, vi, w in sets:
         vgs[gi].add([vi], w, "REPLACE")
+    if err_fit:
+        st["sampled_max_error_mm_truncate"] = round(max(err_trunc) * 1000, 3)
+        st["sampled_max_error_mm_refit"] = round(max(err_fit) * 1000, 3)
     return st
+
+
+def body_last(obj, body):
+    """Move the body material to the LAST slot (Unity: last submesh).  Unity draws extra materials of a renderer on its
+    last submesh; Unity/Calf/Fur/CalfFur.cs appends its shell materials that way, so the body must be last."""
+    import numpy as np
+    me = obj.data
+    order = [m for m in me.materials]
+    if body not in order or order[-1] == body:
+        return False
+    new = [m for m in order if m != body] + [body]
+    remap = np.array([new.index(m) for m in order], dtype=np.int32)
+    idx = np.empty(len(me.polygons), dtype=np.int32)
+    me.polygons.foreach_get("material_index", idx)
+    for i, m in enumerate(new):
+        me.materials[i] = m
+    me.polygons.foreach_set("material_index", remap[np.clip(idx, 0, len(order) - 1)])
+    me.update()
+    return True
 
 
 def triangulate_ngons(obj):
@@ -406,8 +543,15 @@ def prepare(a, blend):
             exported_bones.append(b.name)
     non_deform_kept = [n for n in exported_bones if not arm.data.bones[n].use_deform]
     weight_stats = {}
+    fit = None
+    deform = [n for n in exported_bones if arm.data.bones[n].use_deform]
+    if a.weight_limit == "refit" and actions and _WEIGHT_CACHE:
+        fit = (None, None, a.fit_lambda)        # second pass: reuse the refit of the first pass
+    elif a.weight_limit == "refit" and actions:
+        S = skin_samples(arm, actions, deform, a.fit_frames)
+        fit = (S, {n: j for j, n in enumerate(deform)}, a.fit_lambda) if S is not None else None
     for o in lods:
-        weight_stats[o.name] = limit_weights(o, set(exported_bones), a.max_influences)
+        weight_stats[o.name] = limit_weights(o, arm, set(deform), a.max_influences, fit)
         weight_stats[o.name]["ngons_triangulated"] = triangulate_ngons(o)
     setup_nla(arm, actions)
     # material slots (0 body, 1 eye by convention; fall back to names)
@@ -417,11 +561,21 @@ def prepare(a, blend):
             if s.material:
                 key = "eye" if ("eye" in s.material.name.lower() or i == 1) else "body"
                 mats.setdefault(key, s.material)
-    for o in bpy.data.objects:
-        o.hide_set(False)
+    if not a.keep_slot_order and mats.get("body"):
+        for o in lods:
+            body_last(o, mats["body"])
+    for o in [arm] + lods:
         o.hide_viewport = False
         o.hide_select = False
-    sc.frame_set(int(round(actions[0].frame_range[0])) if actions else sc.frame_current)
+        try:
+            o.hide_set(False)
+        except RuntimeError:        # not in the view layer
+            pass
+    # Park the timeline before every strip (extrapolation NOTHING): nothing is evaluated there, so the pose written
+    # as the FBX nodes' default transforms (Unity's model pose) is the rest pose, not a blend of all strips.
+    park = int(min([act.frame_range[0] for act in actions] + [0])) - 1000
+    sc.frame_set(park)
+    reset_pose(arm)
     return {"scene": sc, "arm": arm, "lods": lods, "actions": actions, "dropped": dropped,
             "bones": exported_bones, "non_deform_kept": non_deform_kept, "weights": weight_stats, "mats": mats}
 
@@ -436,6 +590,9 @@ def export_glb(a, C, tex, out_tex, path):
     wired = wire_textures(C["mats"], tex) if tex else []
     retarget_images(C["mats"], tex, out_tex)
     arm, lod0 = C["arm"], C["lods"][0]
+    mw = lod0.matrix_world.copy()
+    lod0.parent = None              # skinned mesh node at the glTF scene root (parent transforms do not apply
+    lod0.matrix_world = mw          # to skinned meshes; Khronos warns NODE_SKINNED_MESH_NON_ROOT otherwise)
     select_only([arm, lod0])
     bpy.ops.export_scene.gltf(
         filepath=path, export_format="GLB", use_selection=True, export_apply=False, export_yup=True,
@@ -460,6 +617,7 @@ def export_fbx(a, C, tex, out_tex, path):
     if not a.no_rig_axis_bake:
         bake_rig_axes(arm, lods, G)
     reset_pose(arm)
+    C["scene"].frame_set(C["scene"].frame_current)
     select_only([arm] + lods)
     kw = dict(
         filepath=path, use_selection=True, use_visible=False, use_active_collection=False,
@@ -476,7 +634,14 @@ def export_fbx(a, C, tex, out_tex, path):
         bake_anim_force_startend_keying=True, bake_anim_step=1.0, bake_anim_simplify_factor=0.0,
         path_mode="RELATIVE", embed_textures=False, batch_mode="OFF", use_metadata=True)
     if a.take_mode == "all_actions":
-        C["arm"].animation_data.action = None
+        # Blender's own mode: the NLA must be off (strips would blend under the active action and leak into
+        # every take) and the pose at rest (unkeyed channels are restored to the pose captured at export start)
+        ad = C["arm"].animation_data
+        ad.action = None
+        for t in ad.nla_tracks:
+            t.mute = True
+        ad.use_nla = False
+        reset_pose(C["arm"])
     bpy.ops.export_scene.fbx(**kw)
     kw.pop("filepath")
     kw["object_types"] = sorted(kw["object_types"])
@@ -494,11 +659,22 @@ def main(argv):
     ap.add_argument("--keep-helpers", action="store_true", help="keep the unweighted PoleTarget* helper bones")
     ap.add_argument("--helper-pattern", default=r"^PoleTarget")
     ap.add_argument("--max-influences", type=int, default=4)
+    ap.add_argument("--weight-limit", choices=("refit", "truncate"), default="refit",
+                    help="vertices over the influence limit: refit = least-squares refit of the best bone subset over "
+                         "sampled animation poses (default); truncate = keep the strongest bones and renormalise "
+                         "(what Unity's own 4-bone limit does)")
+    ap.add_argument("--fit-frames", type=int, default=240, help="max sampled frames (all actions) for the refit")
+    ap.add_argument("--fit-lambda", type=float, default=1e-4,
+                    help="refit regularisation toward the truncated weights (per frame, m^2 per unit weight^2)")
     ap.add_argument("--take-mode", choices=("nla", "all_actions"), default="nla",
                     help="nla: takes named like the actions (default); all_actions: Blender's 'All Actions' mode "
                          "(takes named 'CalfRig|<action>'; diagnostic)")
     ap.add_argument("--no-rig-axis-bake", action="store_true",
                     help="diagnostic: leave the armature node with the -90 deg X axis rotation")
+    ap.add_argument("--keep-slot-order", action="store_true",
+                    help="keep the source material slot order (default: M_Calf_Body is moved to the last slot = last "
+                         "Unity submesh, which the optional shell fur component Unity/Calf/Fur/CalfFur.cs relies on)")
+    ap.add_argument("--validate", action="store_true", help="run tools/validate_export.py on the result")
     ap.add_argument("--no-fbx", action="store_true")
     ap.add_argument("--no-glb", action="store_true")
     a = ap.parse_args(argv)
@@ -507,6 +683,10 @@ def main(argv):
     out_dir = os.path.abspath(a.out_dir)
     os.makedirs(out_dir, exist_ok=True)
     out_tex = os.path.join(out_dir, "Textures")
+    if os.path.isdir(out_tex):      # repopulated below; Unity .meta files are left alone so GUIDs survive
+        for f in os.listdir(out_tex):
+            if os.path.splitext(f)[1].lower() in IMG_EXT:
+                os.remove(os.path.join(out_tex, f))
     tex = copy_textures(os.path.abspath(a.tex_dir) if a.tex_dir else None, out_tex)
     log("textures copied: %d %s" % (len(tex), "" if tex else "(no --tex-dir or it is empty/missing)"))
     fbx_path = os.path.join(out_dir, a.name + ".fbx")
@@ -546,12 +726,14 @@ def main(argv):
                                       len({round(k.co[1], 6) for k in fc.keyframe_points}) > 1
                                       for fc in action_fcurves(act))}
                   for act in C["actions"]],
-        "textures": sorted(os.path.basename(p) for p in tex.values()),
     })
     for n, s in C["weights"].items():
-        log("%s: max influences %d -> %d, %d verts over the limit (max dropped weight %.3f), %d zero/foreign "
-            "entries removed" % (n, s["max_before"], s["max_after"], s["over_limit"], s["max_dropped_weight"],
-                                 s["zero_or_foreign_removed"]))
+        log("%s: max influences %d -> %d, %d verts over the limit (max weight outside the 4 strongest %.3f), %d "
+            "zero/foreign entries removed; %s%s" % (n, s["max_before"], s["max_after"], s["over_limit"],
+                                                  s["max_dropped_weight"], s["zero_or_foreign_removed"], s["method"],
+            (": sampled max deviation from the all-influence skin %.2f mm truncated -> %.2f mm refit"
+             % (s["sampled_max_error_mm_truncate"], s["sampled_max_error_mm_refit"]))
+            if "sampled_max_error_mm_refit" in s else ""))
     log("bones exported: %d of %d; dropped helpers: %s" % (len(C["bones"]), len(arm.data.bones), C["dropped"]))
     log("takes:", ", ".join("%s [%g-%g]" % (t["name"], t["frame_start"], t["frame_end"]) for t in manifest["takes"]))
 
@@ -561,11 +743,20 @@ def main(argv):
         manifest["rig_axis_bake"] = not a.no_rig_axis_bake
         manifest["files"][os.path.basename(fbx_path)] = os.path.getsize(fbx_path)
         log("FBX written", fbx_path, "(%.2f MB)" % (os.path.getsize(fbx_path) / 1e6))
-    for p in sorted(tex.values()):
-        manifest["files"]["Textures/" + os.path.basename(p)] = os.path.getsize(p)
+    texfiles = sorted(f for f in os.listdir(out_tex) if os.path.splitext(f)[1].lower() in IMG_EXT) \
+        if os.path.isdir(out_tex) else []
+    manifest["textures"] = texfiles
+    for f in texfiles:
+        manifest["files"]["Textures/" + f] = os.path.getsize(os.path.join(out_tex, f))
+    log("textures in %s: %s" % (out_tex, texfiles or "none"))
     with open(os.path.join(out_dir, a.name + "_export_manifest.json"), "w") as fh:
         json.dump(manifest, fh, indent=1)
     log("manifest written; done")
+    if a.validate and not (a.no_fbx or a.no_glb):
+        import subprocess
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "validate_export.py"),
+                            "--fbx", fbx_path, "--glb", glb_path, "--src", blend])
+        sys.exit(r.returncode)
 
 
 if __name__ == "__main__":

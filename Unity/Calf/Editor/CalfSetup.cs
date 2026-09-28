@@ -2,7 +2,7 @@
 // Menu: Tools > Calf > Setup Calf Asset
 //
 // Put the whole Unity/Calf folder anywhere under Assets/ (e.g. Assets/Calf). The script finds Calf.fbx next to it and:
-//   1. configures the model importer (Generic rig, Root as motion node, MikkTSpace tangents, per-clip loop/root-motion settings)
+//   1. configures the model importer (Generic rig, Root as motion node, imported tangents, bones kept, per-clip loop/root-motion settings)
 //   2. configures texture importers (normal map type, linear data maps, 4K)
 //   3. creates materials for the active render pipeline (URP Lit / HDRP Lit / Built-in Standard) and remaps the FBX materials
 //   4. creates an Animator Controller (Speed blend tree + graze / lie / call / leap / shake / eat / turn / death states)
@@ -209,7 +209,8 @@ namespace CalfAsset.EditorTools
             mi.importCameras = false;
             mi.importLights = false;
             mi.importNormals = ModelImporterNormals.Import;
-            mi.importTangents = ModelImporterTangents.CalculateMikk;
+            mi.importTangents = ModelImporterTangents.Import;      // exported tangents = the normal-map bake basis (exact)
+            mi.optimizeBones = false;                              // "Strip Bones" off: Root (motion node) and Tail5 carry no weights
             mi.animationType = ModelImporterAnimationType.Generic;
             mi.avatarSetup = ModelImporterAvatarSetup.CreateFromThisModel;
             mi.importAnimation = true;

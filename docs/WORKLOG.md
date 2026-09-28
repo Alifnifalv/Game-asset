@@ -7,9 +7,9 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 |---|---|---|
 | Geometry (calf reshape, eyes, UVs, LODs) | Done, tuned against the side-view silhouette | `tools/calf_stage_a.py`, `tools/calf_stage_b.py` |
 | Rig upgrade | Jaw + Ear.L/R done; lower-leg tails fixed; 30 fps | `tools/calf_stage_b.py` |
-| Coat textures | In progress (subagent) | `tools/calf_textures.py` |
+| Coat textures | Done (2048 verified); hooves changed to pale horn; final 4K run -> `build/textures`, `build/stage_c.blend` | `tools/calf_textures.py` |
 | Existing clips on the reshaped rig (Eating/Idle) | Done: leg IK re-solved (0 mm hoof gap; Idle front.R 2.3 mm unreachable in the source too) | `tools/check_animation.py`, `tools/rebake_leg_ik.py` |
-| Unity export + validator | Queued (subagent) | `tools/export_unity.py`, `tools/validate_export.py` |
+| Unity export + validator | Done: 117 PASS / 0 FAIL / 1 WARN on the 10-clip stage D; Khronos glTF validator 0 errors | `tools/export_unity.py`, `tools/validate_export.py`, `Unity/Calf/README.md` |
 | New animation set | Gaits done: Walk/Trot/Gallop (RM + in place), TurnLeft90/Right90. Key-pose families in progress | `tools/calf_animations.py`, `tools/anim_lib.py`, `tools/anim_gait.py`, `tools/clips/` |
 | Export rig | Hooves re-parented under the lower legs for engine blending (world motion unchanged, 0.000 mm) | `anim_lib.reparent_hooves_for_export` |
 | Unity setup script | Written; can't be compiled here, needs one Unity check | `Unity/Calf/Editor/CalfSetup.cs` (menu Tools > Calf > Setup Calf Asset) |
@@ -142,3 +142,19 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
   - spine roll sign is opposite to body roll;
   - ear axes;
   - the library's reach clamp makes `Pose()` differ from the armature rest by 9 mm / 3° in the fore legs.
+
+### 2026-09-28: texture + export agents finished
+- **Textures** (`tools/calf_textures.py`):
+  - Rest-position, normal and part maps are baked in Cycles. The coat is a numpy procedural anchored to rig and mesh landmarks: white shoulder band, brisket, belly, hip band, lower legs, tail and forehead blaze; orange barrel, rump, neck and head; pale muzzle with nostrils.
+  - Fur-strand height is baked into a tangent-space normal (MikkTSpace, OpenGL). UV islands have unlimited padding.
+  - Output is deterministic. A 2048 run takes about 70 s; the 4096 run is estimated at 4–5 min and 3–4 GB.
+  - Hoof colour changed to pale horn (HD reference frames) after the run.
+- **Export** (`tools/export_unity.py`, `tools/validate_export.py`):
+  - Takes are exported through **NLA strips, one per action**. Blender 5's "All Actions" mode names takes `CalfRig|X` and leaked 198 mm of pose between takes in a test.
+  - The exporter pre-rotates the rig rest so `CalfRig` has identity rotation in Unity (the FBX apply-transform option doesn't cover armatures). The unweighted PoleTarget helpers are dropped.
+  - **Subdivided LODs carry up to 7–8 influences.** The exporter refits over-limit vertices to their best 4 bones against poses sampled from all clips. The worst case drops from 41 → 23.5 mm vs Blender (Gallop, brisket midline). Open item: limit and refit the weights in stage B so Blender previews equal Unity.
+  - The body submesh is exported last (the fur needs this).
+  - The validator reads the FBX/GLB directly with FBX/glTF transform maths (0.001 mm vs source), re-imports both, runs Khronos gltf-validator (npm, in build/node_tools) and renders comparisons.
+- **Follow-ups done:**
+  - Hoof soles lifted onto z=0 in stage B (the source sank them 4.5 mm front / 12 mm hind).
+  - `CalfSetup.cs` now sets `optimizeBones=false` (Strip Bones would remove the unweighted `Root` motion node) and `importTangents=Import`.

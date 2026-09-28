@@ -18,7 +18,7 @@ Pipeline
        T_Calf_BaseColor.png (sRGB)  T_Calf_Normal.png (tangent, OpenGL +Y, Cycles NORMAL bake of a bump material
        -> MikkTSpace)  T_Calf_Roughness.png  T_Calf_AO.png  T_Calf_MaskMap.png (HDRP: R metal, G AO, B detail, A smooth)
        T_Calf_MetallicSmoothness.png (URP: RGB metal, A smooth)  T_Calf_Height.png (16-bit, fur height used for the
-       normal bake)  T_CalfEye_BaseColor.png  T_CalfEye_Normal.png
+       normal bake)  T_CalfEye_BaseColor.png (1024)
   4. Materials M_Calf_Body / M_Calf_Eye rebuilt on all LODs, images referenced by relative path (or --pack).
 
 Deterministic: all noise uses fixed seeds.
@@ -168,7 +168,6 @@ def save_png(path, arr, bits=8):
         cv2.imwrite(path, a16)
         return
     a8 = np.round(a * 255.0).astype(np.uint8)
-    mode = {2: "L", 3: {1: "L", 3: "RGB", 4: "RGBA"}}
     if a8.ndim == 2:
         Image.fromarray(a8, "L").save(path, optimize=False, compress_level=6)
     else:
@@ -725,9 +724,9 @@ def _coat_chunk(ctx, P, Nr, part, w):
     # forehead blaze (white) cut from the orange: jagged, tuft-like tapered capsule along the forehead
     # midline, from the crown above the poll down to just above eye level
     fA, fB = LM["forehead_A"], LM["forehead_B"]
-    fA = fA + (fA - fB) * 0.08
+    fA = fA + (fA - fB) * 0.18
     tb, db_ = seg_param(P, fA, fB)
-    f_bl = db_ - np.interp(tb, [0.0, 0.4, 1.0], [0.062, 0.05, 0.022]) * sn
+    f_bl = db_ - np.interp(tb, [0.0, 0.2, 0.5, 1.0], [0.05, 0.07, 0.052, 0.022]) * sn
     f_bl = f_bl + 1.2 * edge + 0.0055 * NZ[3].noise(aniso(P, fB - fA, 170.0, 40.0), 6)
     headish = np.maximum(headm, smoothstep(poll[1] + 0.08, poll[1] + 0.03, y) * (wh + wn > 0.8))
     f_bl = np.maximum(f_bl, (0.5 - headish) * 0.1)
@@ -738,7 +737,7 @@ def _coat_chunk(ctx, P, Nr, part, w):
     del f_or
 
     # ---------------------------------------------------------------- colours
-    C_OR = srgb2lin([196, 108, 43]); C_OR_RED = srgb2lin([180, 88, 34]); C_OR_LT = srgb2lin([212, 138, 70])
+    C_OR = srgb2lin([203, 112, 45]); C_OR_RED = srgb2lin([188, 92, 36]); C_OR_LT = srgb2lin([218, 144, 74])
     C_WH = srgb2lin([236, 232, 224]); C_WH_GREY = srgb2lin([214, 208, 202]); C_DIRT = srgb2lin([176, 165, 150])
     lf1 = NZ[9].fbm(P, 3.0, 3); lf2 = NZ[10].fbm(P, 11.0, 2)
     hue = smoothstep(-1.2, 1.2, NZ[11].fbm(P, 1.6, 2))[:, None]
@@ -802,14 +801,17 @@ def _coat_chunk(ctx, P, Nr, part, w):
     rough = rough * (1 - m_lid) + 0.55 * m_lid
     height = 0.5 + (0.16 + 0.06 * torso) * strand + 0.07 * clump
 
-    # ---------------------------------------------------------------- hooves (orig_part 2): dark, glossy
+    # ---------------------------------------------------------------- hooves (orig_part 2): pale horn (white-legged calf,
+    # see the GiM young-cow HD frames), vertical growth streaks, darker/dirtier toward the ground
     hi = np.flatnonzero(part == 2)
     if len(hi):
         Ph = P[hi]; zh = Ph[:, 2]
         ring = np.sin(2 * np.pi * (zh / 0.0035 + 0.6 * NZ[6].noise(Ph * 60.0, 8)))
-        hc = srgb2lin([60, 50, 45]) * (1.0 + 0.10 * NZ[6].fbm(Ph, 40.0, 2) + 0.04 * ring)[:, None]
-        col[hi] = hc * (1 - 0.25 * smoothstep(0.02, -0.005, zh))[:, None]
-        rough[hi] = 0.45 + 0.04 * NZ[6].noise(Ph * 30.0, 10)
+        streak = NZ[6].noise(Ph * np.array([220.0, 220.0, 25.0]), 13)
+        hc = srgb2lin([204, 184, 166]) * (1.0 + 0.08 * NZ[6].fbm(Ph, 40.0, 2) + 0.03 * ring + 0.05 * streak)[:, None]
+        dirt = smoothstep(0.03, 0.0, zh)
+        col[hi] = hc * (1 - 0.30 * dirt)[:, None] + srgb2lin([120, 100, 85]) * (0.18 * dirt)[:, None]
+        rough[hi] = 0.55 + 0.05 * NZ[6].noise(Ph * 30.0, 10) + 0.1 * dirt
         height[hi] = 0.5 + 0.05 * ring + 0.05 * NZ[6].noise(Ph * 90.0, 11)
     # ---------------------------------------------------------------- nose pad (orig_part 3)
     ni = np.flatnonzero(part == 3)
@@ -821,15 +823,17 @@ def _coat_chunk(ctx, P, Nr, part, w):
         nrad = 0.5 * (nmax - nmin)
         nost = np.zeros(len(ni), np.float32); nin = np.zeros(len(ni), np.float32)
         for sx in (-1, 1):   # nostrils: pink surround, darker opening (no nostril geometry on the mesh)
-            c = np.array([sx * 0.55 * nrad[0], nmin[1] + 0.35 * nrad[1], nc_c[2] - 0.18 * nrad[2]])
-            e = ell(Pn, c, np.array([0.30, 0.6, 0.40]) * nrad)
-            nost = np.maximum(nost, smoothstep(1.15, 0.7, e))
-            nin = np.maximum(nin, smoothstep(0.75, 0.35, e))
+            c = np.array([sx * 0.56 * nrad[0], nmin[1] + 0.3 * nrad[1], nc_c[2] - 0.02 * nrad[2]])
+            q = Pn - c
+            q[:, 0] += 0.25 * sx * q[:, 2]          # comma: slit leans outwards towards the bottom
+            e = ell(q, np.zeros(3), np.array([0.26, 0.55, 0.50]) * nrad)
+            nost = np.maximum(nost, smoothstep(1.35, 0.85, e))
+            nin = np.maximum(nin, smoothstep(0.85, 0.45, e))
         nc = nc * (1 - 0.55 * nost[:, None]) + srgb2lin([204, 132, 124]) * (0.55 * nost[:, None])
-        nc = nc * (1 - 0.8 * nin[:, None]) + srgb2lin([112, 62, 60]) * (0.8 * nin[:, None])
+        nc = nc * (1 - 0.9 * nin[:, None]) + srgb2lin([72, 40, 40]) * (0.9 * nin[:, None])
         col[ni] = nc
-        rough[ni] = 0.50 - 0.06 * peb - 0.10 * nost
-        height[ni] = 0.42 + 0.28 * peb - 0.12 * nost
+        rough[ni] = 0.50 - 0.06 * peb - 0.12 * nost
+        height[ni] = 0.42 + 0.28 * peb * (1 - nin) - 0.3 * nin
     return np.clip(col, 0, 1), np.clip(rough, 0.02, 1), np.clip(height, 0, 1)
 
 
@@ -901,7 +905,7 @@ def eye_texture(res, seed):
     q2 = np.stack([np.cos(ang) * 30.0, np.sin(ang) * 30.0, ri * 3.0], -1).reshape(-1, 3)
     fib2 = nz.noise(q2, 1).reshape(res, res)
     blot = nz.noise(np.stack([du * 14, dv * 14, np.zeros_like(du)], -1).reshape(-1, 3), 2).reshape(res, res)
-    C_IRIS = srgb2lin([122, 62, 22]); C_IRIS_IN = srgb2lin([158, 92, 34]); C_IRIS_OUT = srgb2lin([84, 40, 14])
+    C_IRIS = srgb2lin([116, 58, 20]); C_IRIS_IN = srgb2lin([142, 80, 28]); C_IRIS_OUT = srgb2lin([72, 35, 12])
     C_LIMB = srgb2lin([30, 16, 8]); C_PUP = srgb2lin([7, 5, 4]); C_SCL = srgb2lin([150, 118, 96])
     C_RIM = srgb2lin([34, 22, 17])
     t_in = smoothstep(0.75, 0.25, (ri - 0.2) / 0.8)[..., None]
@@ -1098,6 +1102,8 @@ def main(argv):
         return a, LM, D
 
     # ------------------------------------------------------------------ tangent-space normal bake
+    del base, rough_img, ao_img, ao_up, ao_lo, smooth, zero, eye, col, rough, height
+    D.clear()
     baker = Baker(lod0, rest, Wv)
     dist = 0.2 / dbg["fa"]
     nb = baker.bake_normal(height_img, dist, R)
@@ -1114,7 +1120,10 @@ def main(argv):
     # ------------------------------------------------------------------ materials + save
     bpy.data.meshes.remove(rest)
     build_materials(paths)
-    bpy.data.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
+    for coll in (bpy.data.images, bpy.data.meshes, bpy.data.materials, bpy.data.worlds):   # temporaries only
+        for idb in list(coll):
+            if idb.name.startswith(("CalfBake", "_bake")) and idb.users == 0:
+                coll.remove(idb)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     if a.pack:
         for im in bpy.data.images:
