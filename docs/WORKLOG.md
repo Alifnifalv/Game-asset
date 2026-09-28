@@ -124,3 +124,21 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 - The source skinning bulges the withers when the neck pitches hard: the neck bend is spread over Torso3 + Neck1–3 to limit it; weight smoothing is still open.
 - The jaw is a single hinge, so there is no lateral chewing.
 - There are no eyelids, so there are no blinks.
+
+### 2026-09-28: lying clip family (LieDown / Lying_Idle / GetUp)
+- `tools/clips/lying.py` builds `LieDown` (120 f), `Lying_Idle` (150 f loop) and `GetUp` (120 f), with no root motion.
+  - Lying down is front end first: left carpus, then right carpus, then the hindquarters sink onto the right hip.
+  - Getting up is hind end first: rump up on the knees, then the left fore, then the right.
+  - `LYING` is sternal recumbency, both fore legs folded, pelvis rolled onto the right hip, hind legs folded to the left.
+- New techniques in the module:
+  - per-foot Hermite tracks with true zero-tangent stops, so planted hooves hold exactly;
+  - a per-frame "knee lock" that solves body z/roll so a kneeling carpus stays on its ground point;
+  - a Calf_LOD2 mesh ground check, a pop detector, and exact seam checks between the clips.
+- QA:
+  - IK gap ≤0.05 mm; planted hoof slide ≤0.01 mm; locked carpus drift ≤7 mm;
+  - mesh non-hoof min z ≥ -1.1 cm; clip seams 0.000 mm.
+- Rig findings are in `docs/anim_lying.md`:
+  - body roll tilts the front IK planes (the poles are children of Body);
+  - spine roll sign is opposite to body roll;
+  - ear axes;
+  - the library's reach clamp makes `Pose()` differ from the armature rest by 9 mm / 3° in the fore legs.
