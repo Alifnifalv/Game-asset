@@ -32,8 +32,17 @@ import bmesh
 T0 = time.time()
 
 
+def _mem():
+    try:
+        with open("/proc/self/status") as f:
+            d = {l.split(":")[0]: l.split()[1] for l in f if l.startswith(("VmRSS", "VmHWM"))}
+        return "%.2f/%.2fGB" % (int(d["VmRSS"]) / 1e6, int(d["VmHWM"]) / 1e6)
+    except Exception:
+        return "?"
+
+
 def log(*a):
-    print("[calf_tex %6.1fs]" % (time.time() - T0), *a, flush=True)
+    print("[calf_tex %6.1fs %s]" % (time.time() - T0, _mem()), *a, flush=True)
 
 
 # =====================================================================================================
@@ -125,10 +134,9 @@ class Perlin3:
 # =====================================================================================================
 # helpers for images
 # =====================================================================================================
-def fill_background(img, mask):
-    """Nearest-covered-texel fill of every uncovered texel (= unlimited island padding / dilation)."""
+def nearest_index(mask):
+    """flat index of the nearest covered texel for every texel (Voronoi of the UV coverage)"""
     import cv2
-    H, W = mask.shape
     src = (~mask).astype(np.uint8)
     _, lab = cv2.distanceTransformWithLabels(src, cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL)
     lab = lab.ravel()
@@ -136,8 +144,16 @@ def fill_background(img, mask):
     lut = np.zeros(int(lab.max()) + 1, np.int64)
     lut[lab[idx]] = idx
     near = lut[lab]
-    flat = img.reshape(H * W, -1)
-    return flat[near].reshape(img.shape)
+    near[idx] = idx
+    return near
+
+
+def fill_background(img, mask, near=None):
+    """Nearest-covered-texel fill of every uncovered texel (= unlimited island padding / dilation)."""
+    if near is None:
+        near = nearest_index(mask)
+    H, W = mask.shape
+    return img.reshape(H * W, -1)[near].reshape(img.shape)
 
 
 def save_png(path, arr, bits=8):
@@ -563,32 +579,74 @@ def min_dist_to_set(A, Bset, chunk=2048):
     return out
 
 
-def coat_pattern(P, Nr, part, w, LM, texel, seed):
-    """Returns linear base colour (N,3), roughness (N,), height (N,) and debug masks for covered texels."""
+class PatternCtx:
+    """Landmark-derived constants + global point sets shared by all texel chunks."""
+
+    def __init__(self, P, Nr, part, w, LM, texel, seed):
+        self.LM, self.seed = LM, seed
+        self.NZ = [Perlin3(seed + i) for i in range(12)]
+        B = LM["bone"]
+
+        def mid(name, i):   # average of .L/.R, x -> |x|
+            a, b = B[name + ".L"][i], B[name + ".R"][i]
+            return np.array([0.5 * (abs(a[0]) + abs(b[0])), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])])
+
+        self.elbow, self.knee = mid("FrontUpperLeg", 0), mid("FrontUpperLeg", 1)
+        self.hip, self.stifle, self.hock = mid("BackLeg", 0), mid("BackLeg", 1), mid("BackUpperLeg", 1)
+        self.tailpts = np.array([B["Tail1"][0]] + [B["Tail%d" % i][1] for i in range(1, 8)])
+        self.poll, self.headtip = B["Head"][0], B["Head"][1]
+        self.eyeL, self.eyeR = LM["eyes"]["L"][0], LM["eyes"]["R"][0]
+        self.r_eye = 0.5 * (LM["eyes"]["L"][1] + LM["eyes"]["R"][1])
+        y_el = self.elbow[1]
+        self.s = (self.tailpts[0][1] - y_el) / 0.832          # body length scale (elbow -> tail head)
+        self.sn = (y_el - self.poll[1]) / 0.463               # neck length scale (elbow -> poll)
+        yq = y_el + 0.2 * self.s
+        Hb = float(np.interp(yq, LM["prof_y"], LM["prof_top"]) - np.interp(yq, LM["prof_y"], LM["prof_bot"]))
+        self.sh = Hb / 0.53                                   # barrel height scale
+        self.fa = min(230.0, 0.30 / texel)                    # across-strand frequency (texel-limited)
+        # ears (weighted ~50/50 Head/Neck3): found geometrically beside the skull above the eyes
+        ear = self.ear_mask(P, w)
+        inner = ear & (part == 1) & (np.sign(P[:, 0]) * Nr[:, 0] < 0.55)   # concave side faces fwd/down
+        outer = ear & (part != 1)
+        rs = np.random.RandomState(seed)
+        self.inner_pts = P[inner]; self.outer_pts = P[outer]
+        if len(self.outer_pts) > 6000:
+            self.outer_pts = self.outer_pts[rs.choice(len(self.outer_pts), 6000, replace=False)]
+        if len(self.inner_pts) > 6000:
+            self.inner_pts = self.inner_pts[rs.choice(len(self.inner_pts), 6000, replace=False)]
+
+    def ear_mask(self, P, w):
+        x, y, z = P[:, 0], P[:, 1], P[:, 2]
+        eL = self.eyeL
+        return (np.abs(x) > abs(eL[0]) + 0.028) & (z > eL[2]) & (y > eL[1] + 0.035) & \
+            (y < self.poll[1] + 0.09) & (w[:, 6] + w[:, 7] > 0.8)
+
+
+def coat_pattern(P, Nr, part, w, LM, texel, seed, chunk=1 << 20):
+    """Linear base colour (N,3), roughness (N,), height (N,) for covered texels.  Evaluated in texel chunks
+    (bounded memory at 4096); every value is a pure function of the texel's rest position/normal/part/weights,
+    so the result does not depend on the chunking."""
     t0 = time.time()
-    NZ = [Perlin3(seed + i) for i in range(12)]
+    N = len(P)
+    ctx = PatternCtx(P, Nr, part, w, LM, texel, seed)
+    col = np.empty((N, 3), np.float32); rough = np.empty(N, np.float32); height = np.empty(N, np.float32)
+    for s0 in range(0, N, chunk):
+        sl = slice(s0, min(N, s0 + chunk))
+        col[sl], rough[sl], height[sl] = _coat_chunk(ctx, P[sl], Nr[sl], part[sl], w[sl])
+        log("  pattern: %d/%d texels  %.1fs" % (sl.stop, N, time.time() - t0))
+    log("  pattern: done %.1fs (fa=%.0f/m, texel=%.2fmm)" % (time.time() - t0, ctx.fa, texel * 1000))
+    return col, rough, height, {"fa": ctx.fa}
+
+
+def _coat_chunk(ctx, P, Nr, part, w):
+    LM, NZ = ctx.LM, ctx.NZ
     x, y, z = P[:, 0], P[:, 1], P[:, 2]
     nx, ny, nzn = Nr[:, 0], Nr[:, 1], Nr[:, 2]
     wf, wfc, wth, wg, whc, wt, wh, wn, wto = [w[:, i].astype(np.float32) for i in range(9)]
-    B = LM["bone"]
-
-    def mid(name, i):   # average of .L/.R, x -> |x|
-        a, b = B[name + ".L"][i], B[name + ".R"][i]
-        return np.array([0.5 * (abs(a[0]) + abs(b[0])), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])])
-
-    elbow, knee = mid("FrontUpperLeg", 0), mid("FrontUpperLeg", 1)
-    hip, stifle, hock = mid("BackLeg", 0), mid("BackLeg", 1), mid("BackUpperLeg", 1)
-    tailpts = np.array([B["Tail1"][0]] + [B["Tail%d" % i][1] for i in range(1, 8)])
-    poll, headtip = B["Head"][0], B["Head"][1]
-    eyeL, eyeR = LM["eyes"]["L"][0], LM["eyes"]["R"][0]
-    r_eye = 0.5 * (LM["eyes"]["L"][1] + LM["eyes"]["R"][1])
-    eye_mid = 0.5 * (eyeL + eyeR)
-    y_el, z_el = elbow[1], elbow[2]
-    Lb = tailpts[0][1] - y_el                      # elbow -> tail head (0.83 m on the snapshot)
-    s = Lb / 0.832                                 # body length scale vs. the design reference
-    sn = (y_el - poll[1]) / 0.463                  # neck length scale
-    Hb = float(np.interp(y_el + 0.2 * s, LM["prof_y"], LM["prof_top"]) - np.interp(y_el + 0.2 * s, LM["prof_y"], LM["prof_bot"]))
-    sh = Hb / 0.53                                 # barrel height scale
+    elbow, knee, hip, stifle, hock = ctx.elbow, ctx.knee, ctx.hip, ctx.stifle, ctx.hock
+    poll, headtip, eyeL, eyeR, r_eye = ctx.poll, ctx.headtip, ctx.eyeL, ctx.eyeR, ctx.r_eye
+    s, sn, sh, fa = ctx.s, ctx.sn, ctx.sh, ctx.fa
+    y_el = elbow[1]
     legF = smoothstep(0.35, 0.65, wf + wfc)
     legH = smoothstep(0.35, 0.65, wg + whc)
     headm = smoothstep(0.35, 0.65, wh)
@@ -598,32 +656,26 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     # ---------------------------------------------------------------- organic warp + ragged edge noise
     yw = y + 0.032 * NZ[0].fbm(P, 2.0, 3)
     zw = z + 0.026 * NZ[1].fbm(P, 2.0, 3)
-    ztop = np.interp(yw, LM["prof_y"], LM["prof_top"])
-    zbot = np.interp(yw, LM["prof_y"], LM["prof_bot"])
-    dt = ztop - zw           # depth below the top line
-    db = zw - zbot           # height above the bottom line
+    dt = np.interp(yw, LM["prof_y"], LM["prof_top"]) - zw      # depth below the top line
+    db = zw - np.interp(yw, LM["prof_y"], LM["prof_bot"])      # height above the bottom line
     edge = 0.0085 * NZ[2].fbm(P, 7.0, 4) + 0.0022 * NZ[3].noise(P * 42.0, 5)
-    log("  pattern: warp/edge noise %.1fs" % (time.time() - t0))
 
     # ---------------------------------------------------------------- fur strand direction fields
-    fa = min(230.0, 0.30 / texel)                  # across-strand frequency (limited by texel density)
     fl = fa / 9.0
-    dirs = {"body": (np.array([0.0, 1.0, -0.25]), torso + 0.5 * smoothstep(0.35, 0.65, wth)),
-            "leg": (np.array([0.0, 0.08, -1.0]), legF + legH + tailm),
-            "head": (headtip - poll, headm)}
+    dirs = [(np.array([0.0, 1.0, -0.25]), torso + 0.5 * smoothstep(0.35, 0.65, wth)),   # body: head -> tail
+            (np.array([0.0, 0.08, -1.0]), legF + legH + tailm),                          # legs/tail: down
+            (headtip - poll, headm)]                                                     # face: poll -> nose
     strand = np.zeros(len(P), np.float32); wsum = np.zeros(len(P), np.float32)
     clump = np.zeros(len(P), np.float32)
-    for k, (dname, (dv, wd)) in enumerate(dirs.items()):
+    for k, (dv, wd) in enumerate(dirs):
         m = wd > 0.02
         if not m.any():
             continue
         q = aniso(P[m], dv, fa, fl)
         v = 0.7 * NZ[4 + k].noise(q, 0) + 0.45 * NZ[4 + k].noise(q * 2.03, 1)
-        q2 = aniso(P[m], dv, fa / 4.0, fa / 12.0)
-        c = NZ[7 + k].noise(q2, 2)
+        c = NZ[7 + k].noise(aniso(P[m], dv, fa / 4.0, fa / 12.0), 2)
         strand[m] += wd[m] * v; clump[m] += wd[m] * c; wsum[m] += wd[m]
     strand /= np.maximum(wsum, 1e-3); clump /= np.maximum(wsum, 1e-3)
-    log("  pattern: strands %.1fs (fa=%.0f/m, texel=%.2fmm)" % (time.time() - t0, fa, texel * 1000))
 
     # ---------------------------------------------------------------- patch layout (signed metric fields)
     # shoulder band (white): front / rear edge y as a function of depth below the top line
@@ -636,13 +688,13 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     hbF = hip[1] + np.array([-0.20, -0.14, -0.11, -0.10, -0.10]) * s
     hbR = hip[1] + np.array([-0.085, -0.025, -0.005, 0.005, 0.0]) * s
     yF_hb = np.interp(dt, dth, hbF); yR_hb = np.interp(dt, dth, hbR)
-    # white belly height above the bottom line, along y
+    # white belly/brisket height above the bottom line, along y
     by = np.array([y_el - 0.23 * s, y_el - 0.15 * s, y_el - 0.05 * s, y_el + 0.2 * s, 0.5 * (y_el + hip[1]),
                    stifle[1] - 0.12 * s, stifle[1], hip[1] + 0.1 * s])
     bh = np.array([0.0, 0.10, 0.10, 0.065, 0.055, 0.09, 0.17, 0.22]) * sh
     hb = np.interp(yw, by, bh)
     z_rb = stifle[2] + 0.075 * sh                  # lower limit of the orange rump
-    s_tail, d_tail, L_tail = polyline_param(P, tailpts)
+    s_tail, _, L_tail = polyline_param(P, ctx.tailpts)
 
     f1 = yw - yF_sb                                        # head / neck / shoulder / forearm orange
     f1 = np.maximum(f1, np.where(torso + legF > 0.5, hb - db, -1.0))    # white brisket + chest
@@ -654,7 +706,7 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     s_tb = 0.45 + 0.04 * NZ[8].noise(P * 20.0, 4)
     f5 = np.maximum((0.5 - tailm) * 0.1, (s_tail - s_tb) * L_tail)     # orange tail base
     f_tw = np.maximum((0.5 - tailm) * 0.1, (s_tb - s_tail) * L_tail)   # white rest of the tail (cut)
-    # forearms: fully orange on the right leg, lateral/front only and shorter on the left leg
+    # forearms: fully orange on the right leg, lateral/front only on the left leg
     lat = np.sign(x) * nx
     fa_top = np.where(x > 0, knee[2] + 0.22 * (elbow[2] - knee[2]), knee_edge + 0.008)
     f6 = np.maximum((0.5 - legF) * 0.1, fa_top - zw)
@@ -663,14 +715,15 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     stL = np.array([stifle[0] + 0.05, stifle[1] + 0.075 * s, stifle[2] + 0.02])
     f4 = (ell(P, stL, np.array([0.09, 0.075, 0.105]) * s) - 1.0) * 0.08
     f4 = np.maximum(f4, 0.06 - x)
-    # a few small orange spots on the white hind legs / thighs
+    # a few small orange spots on the white hind legs (gaskin)
     f7 = (2.15 - NZ[8].fbm(P, 14.0, 2)) * 0.015
     f7 = np.maximum(f7, (0.5 - legH) * 0.1)
     f7 = np.maximum(f7, np.maximum((hock[2] - 0.03) - zw, zw - (stifle[2] - 0.04)))
     f_or = np.minimum.reduce([f1, f2, f3, f4, f5, f6, f7])
     f_or = np.maximum(f_or, -f_tw)
-    # forehead blaze (white) cut from the orange: jagged, tuft-like, on top of the head between the ears
-    # (tapered capsule along the forehead midline: crown above the poll -> just above eye level)
+    del f1, f2, f3, f4, f5, f6, f7, f_tw, yF_sb, yR_sb, yF_hb, yR_hb, lat, fa_top, s_tail, s_tb
+    # forehead blaze (white) cut from the orange: jagged, tuft-like tapered capsule along the forehead
+    # midline, from the crown above the poll down to just above eye level
     fA, fB = LM["forehead_A"], LM["forehead_B"]
     fA = fA + (fA - fB) * 0.08
     tb, db_ = seg_param(P, fA, fB)
@@ -679,14 +732,13 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     headish = np.maximum(headm, smoothstep(poll[1] + 0.08, poll[1] + 0.03, y) * (wh + wn > 0.8))
     f_bl = np.maximum(f_bl, (0.5 - headish) * 0.1)
     f_or = np.maximum(f_or, -f_bl)
+    del tb, db_, f_bl, headish
     ew = 0.0055
-    f_or = f_or + edge + 0.0018 * strand
-    M_or = smoothstep(ew, -ew, f_or).astype(np.float32)
-    log("  pattern: layout %.1fs" % (time.time() - t0))
+    M_or = smoothstep(ew, -ew, f_or + edge + 0.0018 * strand).astype(np.float32)
+    del f_or
 
     # ---------------------------------------------------------------- colours
     C_OR = srgb2lin([196, 108, 43]); C_OR_RED = srgb2lin([180, 88, 34]); C_OR_LT = srgb2lin([212, 138, 70])
-    C_OR_DK = srgb2lin([122, 56, 22])
     C_WH = srgb2lin([236, 232, 224]); C_WH_GREY = srgb2lin([214, 208, 202]); C_DIRT = srgb2lin([176, 165, 150])
     lf1 = NZ[9].fbm(P, 3.0, 3); lf2 = NZ[10].fbm(P, 11.0, 2)
     hue = smoothstep(-1.2, 1.2, NZ[11].fbm(P, 1.6, 2))[:, None]
@@ -702,8 +754,8 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     br = br - 0.13 * m_spine - 0.12 * m_low - 0.16 * m_throat - 0.25 * m_eye
     lt = (0.55 * m_top)[:, None]
     orange = orange * (1 - lt) + C_OR_LT * lt
-    orange = orange * br[:, None]
-    orange = orange * (1 + 0.085 * strand)[:, None]
+    orange = orange * (br * (1 + 0.085 * strand))[:, None]
+    del hue, br, m_top, m_spine, m_low, m_throat, m_eye, lt
     white = C_WH * (1.0 + 0.02 * lf1 + 0.012 * lf2)[:, None]
     m_wgrey = np.clip(np.clip(-nzn, 0, 1) * torso * 0.5 + 0.35 * smoothstep(0.5, 0.0, np.abs(lf1)) * 0.3, 0, 1)
     white = white * (1 - m_wgrey[:, None]) + C_WH_GREY * m_wgrey[:, None]
@@ -716,6 +768,7 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     spk = smoothstep(0.9, 1.6, NZ[5].noise(aniso(P, [0, 0.3, -1], 70.0, 25.0), 7)) * m_br
     white = white * (1 - 0.55 * spk[:, None]) + srgb2lin([150, 104, 72]) * (0.55 * spk[:, None])
     col = orange * M_or[:, None] + white * (1 - M_or[:, None])
+    del orange, white, m_wgrey, m_dirt, m_br, spk, yw, zw, dt, db, hb
 
     # ---------------------------------------------------------------- head details
     # muzzle ring (lighter tan) around the nose pad
@@ -725,70 +778,59 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     # dark eyelid rim right at the socket
     m_lid = smoothstep(0.009, 0.002, dE) * headm
     col = col * (1 - 0.85 * m_lid[:, None]) + srgb2lin([52, 30, 22]) * (0.85 * m_lid[:, None])
-    # ears (weighted ~50/50 Head/Neck3, so found geometrically beside the skull above the eyes):
-    # inner side (old light part) pale pinkish tan, darker rim
-    ex = abs(eyeL[0])
-    ear = (np.abs(x) > ex + 0.028) & (z > eyeL[2] + 0.0) & (y > eyeL[1] + 0.035) & (y < poll[1] + 0.09) \
-        & (wh + wn > 0.8)
-    inner = ear & (part == 1) & (np.sign(x) * nx < 0.55)      # concave side faces forward/down, not sideways
+    # ears: inner side (old light part) pale pinkish tan, darker rim along the inner/outer boundary
+    ear = ctx.ear_mask(P, w)
+    inner = ear & (part == 1) & (np.sign(x) * nx < 0.55)
+    outer = ear & (part != 1)
     m_in = np.zeros(len(P), np.float32); m_rim = np.zeros(len(P), np.float32)
     if inner.any():
-        outer_pts = P[ear & (part != 1)]
-        if len(outer_pts) > 6000:
-            outer_pts = outer_pts[np.random.RandomState(seed).choice(len(outer_pts), 6000, replace=False)]
-        d_o = min_dist_to_set(P[inner], outer_pts)
+        d_o = min_dist_to_set(P[inner], ctx.outer_pts)
         m_in[inner] = smoothstep(0.003, 0.012, d_o)
         m_rim[inner] = smoothstep(0.009, 0.002, d_o)
-        inner_pts = P[inner]
-        if len(inner_pts) > 6000:
-            inner_pts = inner_pts[np.random.RandomState(seed + 1).choice(len(inner_pts), 6000, replace=False)]
-        outer = ear & (part != 1)
-        d_i = min_dist_to_set(P[outer], inner_pts)
-        m_rim[outer] = smoothstep(0.008, 0.001, d_i)
+    if outer.any() and len(ctx.inner_pts):
+        m_rim[outer] = smoothstep(0.008, 0.001, min_dist_to_set(P[outer], ctx.inner_pts))
     C_EAR = srgb2lin([214, 170, 142])
     col = col * (1 - m_in[:, None]) + (C_EAR * (1 + 0.1 * strand)[:, None]) * m_in[:, None]
     col = col * (1 - 0.7 * m_rim[:, None]) + srgb2lin([112, 54, 24]) * (0.7 * m_rim[:, None])
-
-    # ---------------------------------------------------------------- hooves & nose pad (orig_part)
-    hoof = (part == 2).astype(np.float32)
-    ring = np.sin(2 * np.pi * (z / 0.0035 + 0.6 * NZ[6].noise(P * 60.0, 8)))
-    hoofc = srgb2lin([60, 50, 45]) * (1.0 + 0.10 * NZ[6].fbm(P, 40.0, 2) + 0.04 * ring)[:, None]
-    hoofc = hoofc * (1 - 0.25 * smoothstep(0.02, -0.005, z))[:, None]
-    col = col * (1 - hoof[:, None]) + hoofc * hoof[:, None]
-    nose = (part == 3).astype(np.float32)
-    peb = 1.0 - np.abs(NZ[7].noise(P * 330.0, 9))                  # ridged -> pebbled plates with grooves
-    peb = np.clip(peb, 0, 1) ** 1.5
-    nc = srgb2lin([226, 186, 162]) * (0.95 + 0.05 * peb + 0.03 * NZ[7].noise(P * 60.0, 12))[:, None]
-    nc_c = LM["nose_c"]; nmin, nmax = LM["nose_min"], LM["nose_max"]
-    nrad = 0.5 * (nmax - nmin)
-    nost = np.zeros(len(P), np.float32); nin = np.zeros(len(P), np.float32)
-    for sx in (-1, 1):   # nostrils: pink surround, darker opening (no nostril geometry on the mesh)
-        c = np.array([sx * 0.55 * nrad[0], nmin[1] + 0.35 * nrad[1], nc_c[2] - 0.18 * nrad[2]])
-        e = ell(P, c, np.array([0.30, 0.6, 0.40]) * nrad)
-        nost = np.maximum(nost, smoothstep(1.15, 0.7, e))
-        nin = np.maximum(nin, smoothstep(0.75, 0.35, e))
-    nc = nc * (1 - 0.55 * nost[:, None]) + srgb2lin([204, 132, 124]) * (0.55 * nost[:, None])
-    nc = nc * (1 - 0.8 * nin[:, None]) + srgb2lin([112, 62, 60]) * (0.8 * nin[:, None])
-    col = col * (1 - nose[:, None]) + nc * nose[:, None]
     # soft pink blend of the hairy muzzle edge into the pad
-    m_nb = smoothstep(0.012, 0.0, dn) * (1 - nose) * headm
+    m_nb = smoothstep(0.012, 0.0, dn) * (part != 3) * headm
     col = col * (1 - 0.35 * m_nb[:, None]) + srgb2lin([216, 168, 140]) * (0.35 * m_nb[:, None])
 
-    # ---------------------------------------------------------------- roughness & height
+    # ---------------------------------------------------------------- roughness & height (fur)
     rough = 0.80 + 0.03 * lf2 - 0.035 * strand - 0.02 * (1 - M_or)
-    rough = rough * (1 - hoof) + (0.45 + 0.04 * NZ[6].noise(P * 30.0, 10)) * hoof
-    rough = rough * (1 - nose) + (0.50 - 0.06 * peb - 0.10 * nost) * nose
     rough = rough * (1 - m_in) + 0.72 * m_in
     rough = rough * (1 - m_lid) + 0.55 * m_lid
-    fur_amp = 0.16 + 0.06 * torso
-    height = 0.5 + fur_amp * strand + 0.07 * clump
-    height = height * (1 - hoof) + (0.5 + 0.05 * ring + 0.05 * NZ[6].noise(P * 90.0, 11)) * hoof
-    height = height * (1 - nose) + (0.42 + 0.28 * peb - 0.12 * nost) * nose
-    log("  pattern: done %.1fs" % (time.time() - t0))
-    dbg = {"fa": fa, "orange": M_or, "torso": torso, "legF": legF, "legH": legH, "head": headm, "tail": tailm,
-           "strand": strand, "ear_in": m_in}
-    return np.clip(col, 0, 1).astype(np.float32), np.clip(rough, 0.02, 1).astype(np.float32), \
-        np.clip(height, 0, 1).astype(np.float32), dbg
+    height = 0.5 + (0.16 + 0.06 * torso) * strand + 0.07 * clump
+
+    # ---------------------------------------------------------------- hooves (orig_part 2): dark, glossy
+    hi = np.flatnonzero(part == 2)
+    if len(hi):
+        Ph = P[hi]; zh = Ph[:, 2]
+        ring = np.sin(2 * np.pi * (zh / 0.0035 + 0.6 * NZ[6].noise(Ph * 60.0, 8)))
+        hc = srgb2lin([60, 50, 45]) * (1.0 + 0.10 * NZ[6].fbm(Ph, 40.0, 2) + 0.04 * ring)[:, None]
+        col[hi] = hc * (1 - 0.25 * smoothstep(0.02, -0.005, zh))[:, None]
+        rough[hi] = 0.45 + 0.04 * NZ[6].noise(Ph * 30.0, 10)
+        height[hi] = 0.5 + 0.05 * ring + 0.05 * NZ[6].noise(Ph * 90.0, 11)
+    # ---------------------------------------------------------------- nose pad (orig_part 3)
+    ni = np.flatnonzero(part == 3)
+    if len(ni):
+        Pn = P[ni]
+        peb = np.clip(1.0 - np.abs(NZ[7].noise(Pn * 330.0, 9)), 0, 1) ** 1.5   # pebbled plates + grooves
+        nc = srgb2lin([226, 186, 162]) * (0.95 + 0.05 * peb + 0.03 * NZ[7].noise(Pn * 60.0, 12))[:, None]
+        nc_c = LM["nose_c"]; nmin, nmax = LM["nose_min"], LM["nose_max"]
+        nrad = 0.5 * (nmax - nmin)
+        nost = np.zeros(len(ni), np.float32); nin = np.zeros(len(ni), np.float32)
+        for sx in (-1, 1):   # nostrils: pink surround, darker opening (no nostril geometry on the mesh)
+            c = np.array([sx * 0.55 * nrad[0], nmin[1] + 0.35 * nrad[1], nc_c[2] - 0.18 * nrad[2]])
+            e = ell(Pn, c, np.array([0.30, 0.6, 0.40]) * nrad)
+            nost = np.maximum(nost, smoothstep(1.15, 0.7, e))
+            nin = np.maximum(nin, smoothstep(0.75, 0.35, e))
+        nc = nc * (1 - 0.55 * nost[:, None]) + srgb2lin([204, 132, 124]) * (0.55 * nost[:, None])
+        nc = nc * (1 - 0.8 * nin[:, None]) + srgb2lin([112, 62, 60]) * (0.8 * nin[:, None])
+        col[ni] = nc
+        rough[ni] = 0.50 - 0.06 * peb - 0.10 * nost
+        height[ni] = 0.42 + 0.28 * peb - 0.12 * nost
+    return np.clip(col, 0, 1), np.clip(rough, 0.02, 1), np.clip(height, 0, 1)
 
 
 def estimate_texel(pos, cov):
@@ -1020,10 +1062,12 @@ def main(argv):
     # ------------------------------------------------------------------ assemble + pad textures
     import cv2
 
+    near = nearest_index(cov)
+
     def to_img(vals, C):
         img = np.zeros((R, R, C), np.float32)
         img[cov] = vals.reshape(-1, C)
-        return fill_background(img, cov)
+        return fill_background(img, cov, near)
 
     paths = {}
 
@@ -1041,7 +1085,7 @@ def main(argv):
     ao_lo = blur_masked(ao_lo, ao_cov, 0.8)
     ao_lo = fill_background(ao_lo[..., None], ao_cov)[..., 0]
     ao_up = cv2.resize(ao_lo, (R, R), interpolation=cv2.INTER_LINEAR)
-    ao_img = fill_background(np.clip(ao_up, 0, 1)[..., None], cov)[..., 0]
+    ao_img = fill_background(np.clip(ao_up, 0, 1)[..., None], cov, near)[..., 0]
     save_png(out_path("T_Calf_AO"), ao_img)
     smooth = 1.0 - rough_img
     zero = np.zeros_like(smooth)
@@ -1061,7 +1105,7 @@ def main(argv):
     n = nb[..., :3] * 2 - 1
     n /= np.maximum(np.linalg.norm(n, axis=-1, keepdims=True), 1e-6)
     n = n * 0.5 + 0.5
-    n = fill_background(n.astype(np.float32), cov)
+    n = fill_background(n.astype(np.float32), cov, near)
     save_png(out_path("T_Calf_Normal"), n)
     nc = n[cov]
     log("normal map mean RGB (0-255):", np.round(nc.mean(0) * 255, 1).tolist(),
