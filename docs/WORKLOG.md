@@ -12,7 +12,9 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 | Unity export + validator | Queued (subagent) | `tools/export_unity.py`, `tools/validate_export.py` |
 | New animation set | Gaits done: Walk/Trot/Gallop (RM + in place), TurnLeft90/Right90. Key-pose families in progress | `tools/calf_animations.py`, `tools/anim_lib.py`, `tools/anim_gait.py`, `tools/clips/` |
 | Export rig | Hooves re-parented under the lower legs for engine blending (world motion unchanged, 0.000 mm) | `anim_lib.reparent_hooves_for_export` |
-| Fur, Unity setup script | Not started | see `docs/PLAN.md` |
+| Unity setup script | Written; can't be compiled here, needs one Unity check | `Unity/Calf/Editor/CalfSetup.cs` (menu Tools > Calf > Setup Calf Asset) |
+| Key-pose clip families | In progress (workflow: author → adversarial review → fix): idle_graze, lying, actions | `tools/clips/*.py` |
+| Fur | Not started (plan: URP shell fur via extra materials on the body submesh, LOD0 only) | see `docs/PLAN.md` |
 
 ## Log
 

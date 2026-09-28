@@ -188,8 +188,24 @@ def region_of(bone_name):
     return 8
 
 
-def mesh_arrays(ob):
-    me = ob.data
+def rest_mesh(ob):
+    """Evaluated copy of the mesh in REST pose: armature modifiers disabled, other modifiers applied,
+    all data layers (UVs, orig_part, vertex-group weights) kept."""
+    arms = [m for m in ob.modifiers if m.type == "ARMATURE"]
+    st = [(m, m.show_viewport, m.show_render) for m in arms]
+    for m in arms:
+        m.show_viewport = False; m.show_render = False
+    dg = bpy.context.evaluated_depsgraph_get()
+    dg.update()
+    me = bpy.data.meshes.new_from_object(ob.evaluated_get(dg), preserve_all_data_layers=True, depsgraph=dg)
+    for m, v, r in st:
+        m.show_viewport = v; m.show_render = r
+    me.name = "CalfBake_rest"
+    return me
+
+
+def mesh_arrays(ob, me=None):
+    me = me or ob.data
     nv, nf = len(me.vertices), len(me.polygons)
     co = np.zeros(nv * 3); me.vertices.foreach_get("co", co); co = co.reshape(-1, 3)
     part = np.zeros(nf, np.int32)
@@ -331,14 +347,14 @@ def array_to_image(img, arr):
 class Baker:
     """Owns a temporary rest-pose copy of Calf_LOD0 (eyes split off) in the current scene."""
 
-    def __init__(self, lod0, W, part_face):
+    def __init__(self, lod0, rest, W):
         sc = bpy.context.scene
         self.sc = sc
         self.hidden = []
         for o in sc.objects:
             if not o.hide_render:
                 self.hidden.append(o); o.hide_render = True
-        me = lod0.data.copy(); me.name = "CalfBake_mesh"
+        me = rest.copy(); me.name = "CalfBake_mesh"
         nv = len(me.vertices)
         for k, nm in enumerate(("wA", "wB", "wC")):
             a = me.color_attributes.new(nm, "FLOAT_COLOR", "POINT")
@@ -634,12 +650,13 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     f1 = np.maximum(f1, knee_edge - zw)                    # white below the knees
     f2 = np.maximum.reduce([yR_sb - yw, yw - yF_hb, hb - db])           # barrel
     f2 = np.maximum(f2, (0.5 - torso) * 0.1)
-    f3 = np.maximum(yR_hb - yw, z_rb - zw)                 # rump
-    f3 = np.maximum(f3, (tailm - 0.5) * 0.1)
-    f5 = np.maximum((0.5 - tailm) * 0.1, (s_tail - 0.33) * L_tail)     # tail base
+    f3 = np.maximum(yR_hb - yw, z_rb - zw)                 # rump (incl. the tail root)
+    s_tb = 0.45 + 0.04 * NZ[8].noise(P * 20.0, 4)
+    f5 = np.maximum((0.5 - tailm) * 0.1, (s_tail - s_tb) * L_tail)     # orange tail base
+    f_tw = np.maximum((0.5 - tailm) * 0.1, (s_tb - s_tail) * L_tail)   # white rest of the tail (cut)
     # forearms: fully orange on the right leg, lateral/front only and shorter on the left leg
     lat = np.sign(x) * nx
-    fa_top = np.where(x > 0, knee[2] + 0.45 * (elbow[2] - knee[2]), knee_edge + 0.008)
+    fa_top = np.where(x > 0, knee[2] + 0.22 * (elbow[2] - knee[2]), knee_edge + 0.008)
     f6 = np.maximum((0.5 - legF) * 0.1, fa_top - zw)
     f6 = np.maximum(f6, np.where(x > 0, (-0.15 - (lat - 0.6 * ny)) * 0.05, -1.0))
     # left outer thigh / stifle patch hanging down from the rump orange (asymmetry)
@@ -651,13 +668,14 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     f7 = np.maximum(f7, (0.5 - legH) * 0.1)
     f7 = np.maximum(f7, np.maximum((hock[2] - 0.03) - zw, zw - (stifle[2] - 0.04)))
     f_or = np.minimum.reduce([f1, f2, f3, f4, f5, f6, f7])
+    f_or = np.maximum(f_or, -f_tw)
     # forehead blaze (white) cut from the orange: jagged, tuft-like, on top of the head between the ears
     # (tapered capsule along the forehead midline: crown above the poll -> just above eye level)
     fA, fB = LM["forehead_A"], LM["forehead_B"]
     fA = fA + (fA - fB) * 0.08
     tb, db_ = seg_param(P, fA, fB)
-    f_bl = db_ - np.interp(tb, [0.0, 0.45, 1.0], [0.05, 0.043, 0.02]) * sn
-    f_bl = f_bl + 1.5 * edge + 0.008 * NZ[3].noise(aniso(P, fB - fA, 170.0, 40.0), 6)
+    f_bl = db_ - np.interp(tb, [0.0, 0.4, 1.0], [0.062, 0.05, 0.022]) * sn
+    f_bl = f_bl + 1.2 * edge + 0.0055 * NZ[3].noise(aniso(P, fB - fA, 170.0, 40.0), 6)
     headish = np.maximum(headm, smoothstep(poll[1] + 0.08, poll[1] + 0.03, y) * (wh + wn > 0.8))
     f_bl = np.maximum(f_bl, (0.5 - headish) * 0.1)
     f_or = np.maximum(f_or, -f_bl)
@@ -702,8 +720,8 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed):
     # ---------------------------------------------------------------- head details
     # muzzle ring (lighter tan) around the nose pad
     dn = box_dist(P, LM["nose_min"], LM["nose_max"])
-    m_ring = smoothstep(0.05 * sn, 0.012, dn) * headm * M_or
-    col = col * (1 - 0.55 * m_ring[:, None]) + srgb2lin([214, 152, 104]) * (0.55 * m_ring[:, None])
+    m_ring = smoothstep(0.045 * sn, 0.01, dn) * headm * M_or
+    col = col * (1 - 0.45 * m_ring[:, None]) + srgb2lin([212, 146, 94]) * (0.45 * m_ring[:, None])
     # dark eyelid rim right at the socket
     m_lid = smoothstep(0.009, 0.002, dE) * headm
     col = col * (1 - 0.85 * m_lid[:, None]) + srgb2lin([52, 30, 22]) * (0.85 * m_lid[:, None])
@@ -965,7 +983,9 @@ def main(argv):
     bpy.ops.wm.open_mainfile(filepath=inp)
     arm = bpy.data.objects["CalfRig"]
     lod0 = bpy.data.objects["Calf_LOD0"]
-    co, part_f, ls, lt, lv, Wv = mesh_arrays(lod0)
+    rest = rest_mesh(lod0)
+    co, part_f, ls, lt, lv, Wv = mesh_arrays(lod0, rest)
+    log("rest mesh: %d verts, %d faces" % (len(rest.vertices), len(rest.polygons)))
     LM = compute_landmarks(arm, lod0, co, part_f, ls, lt, lv, Wv)
     log("landmarks", lm_summary(LM))
 
@@ -976,7 +996,7 @@ def main(argv):
             D = {k: z[k] for k in z.files}
             log("loaded bake cache", a.cache)
     if D is None:
-        baker = Baker(lod0, Wv, part_f)
+        baker = Baker(lod0, rest, Wv)
         D = bake_data(baker, R, ao_res, a.ao_samples, a.ao_dist, LM["bbmin"], LM["bbmax"])
         baker.cleanup()
         if a.cache:
@@ -989,10 +1009,13 @@ def main(argv):
     Nr = D["nrm"][cov].astype(np.float32)
     part = D["part"][cov].astype(np.int32)
     wreg = D["w"][cov].astype(np.float32)
+    for k in ("pos", "nrm", "part", "w"):      # free the full-res float bakes (4096 memory)
+        D.pop(k, None)
     col, rough, height, dbg = coat_pattern(P, Nr, part, wreg, LM, texel, a.seed)
     if a.preview:
         preview(a.preview, P, Nr, col, LM)
         log("wrote preview", a.preview)
+    del P, Nr, wreg, part
 
     # ------------------------------------------------------------------ assemble + pad textures
     import cv2
@@ -1031,7 +1054,7 @@ def main(argv):
         return a, LM, D
 
     # ------------------------------------------------------------------ tangent-space normal bake
-    baker = Baker(lod0, Wv, part_f)
+    baker = Baker(lod0, rest, Wv)
     dist = 0.2 / dbg["fa"]
     nb = baker.bake_normal(height_img, dist, R)
     baker.cleanup()
@@ -1045,6 +1068,7 @@ def main(argv):
         "std:", np.round(nc.std(0) * 255, 1).tolist(), "bump distance %.5f m" % dist)
 
     # ------------------------------------------------------------------ materials + save
+    bpy.data.meshes.remove(rest)
     build_materials(paths)
     bpy.data.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
     os.makedirs(os.path.dirname(out), exist_ok=True)
@@ -1056,7 +1080,8 @@ def main(argv):
     if not a.pack:
         bpy.ops.file.make_paths_relative()
         bpy.ops.wm.save_mainfile()
-    log("saved", out)
+    import resource
+    log("saved", out, "| peak RSS %.2f GB" % (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6))
     for k, p in sorted(paths.items()):
         from PIL import Image
         with Image.open(p) as im:
