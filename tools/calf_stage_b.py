@@ -505,6 +505,45 @@ import weight_utils
 weight_utils.smooth_groups(ob, ["Torso2", "Torso3", "Neck1", "Neck2", "Neck3", "FrontShoulder.L", "FrontShoulder.R"],
                            factor=0.5, iterations=6)
 
+# tail: re-split the chain weight so every link owns its segment (cow.glb has no Tail5 group; review EXP-6)
+_TAIL = ["Tail%d" % i for i in range(1, 8)]
+_M = ob.matrix_world.inverted() @ arm.matrix_world
+weight_utils.resplit_chain(ob, [(_M @ arm.data.bones[n].head_local, _M @ arm.data.bones[n].tail_local) for n in _TAIL], _TAIL)
+
+# brisket midline (review EXP-2): the source mixes BOTH front legs + shoulders + Neck2 on the chest midline, which
+# tears when the legs move in opposite directions (gallop, get-up) and can't be represented with 4 influences.
+# Move that weight onto the chest (Torso3/Torso2), keeping a light same-side leg influence.
+def repaint_brisket():
+    me_ = ob.data
+    gi = {g.name: g.index for g in ob.vertex_groups}
+    legs = {"L": [gi["FrontUpperLeg.L"], gi["FrontShoulder.L"]], "R": [gi["FrontUpperLeg.R"], gi["FrontShoulder.R"]]}
+    t3, t2, n2 = gi["Torso3"], gi["Torso2"], gi["Neck2"]
+    elbow_y = arm.data.bones["FrontUpperLeg.L"].head_local.y
+    elbow_z = arm.data.bones["FrontUpperLeg.L"].head_local.z
+    changed = 0
+    for v in me_.vertices:
+        c = v.co
+        wmid = smoothstep(0.075, 0.0, abs(c.x)) * smoothstep(elbow_y - 0.22, elbow_y - 0.10, c.y) \
+            * (1 - smoothstep(elbow_y + 0.08, elbow_y + 0.16, c.y)) * (1 - smoothstep(elbow_z + 0.05, elbow_z + 0.15, c.z))
+        if wmid <= 1e-3: continue
+        w = {g.group: g.weight for g in v.groups}
+        side = "L" if c.x >= 0 else "R"
+        other = "R" if side == "L" else "L"
+        moved = 0.0
+        for g in legs[side]:
+            if g in w: d = w[g] * 0.6 * wmid; w[g] -= d; moved += d
+        for g in legs[other]:
+            if g in w: d = w[g] * 0.95 * wmid; w[g] -= d; moved += d
+        if n2 in w: d = w[n2] * 0.5 * wmid; w[n2] -= d; moved += d
+        if moved <= 1e-5: continue
+        w[t3] = w.get(t3, 0.0) + 0.7 * moved
+        w[t2] = w.get(t2, 0.0) + 0.3 * moved
+        for g, val in w.items():
+            ob.vertex_groups[g].add([v.index], val, "REPLACE")
+        changed += 1
+    print("brisket repaint:", changed, "cage verts")
+repaint_brisket()
+
 # enforce <=4 influences, normalised
 for v in ob.data.vertices:
     gs = sorted([(g.group, g.weight) for g in v.groups if g.weight > 0], key=lambda t: -t[1])
@@ -533,6 +572,9 @@ def make_lod(level, name):
     return d
 
 lods = [make_lod(2, "Calf_LOD0"), make_lod(1, "Calf_LOD1"), make_lod(0, "Calf_LOD2")]
+# subdivision interpolates weights (up to 7 influences on LOD0): limit every LOD to 4 so Blender == Unity
+for d in lods:
+    weight_utils.limit_total(d, 4)
 bpy.data.objects.remove(ob, do_unlink=True)
 for d in lods:
     d.parent = arm

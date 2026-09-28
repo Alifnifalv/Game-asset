@@ -47,6 +47,7 @@ namespace CalfAsset.EditorTools
             { "Call", (false, RootMotion.None) }, { "HeadShake", (false, RootMotion.None) },
             { "LieDown", (false, RootMotion.None) }, { "Lying_Idle", (true, RootMotion.None) }, { "GetUp", (false, RootMotion.None) },
             { "Death", (false, RootMotion.Translate) }, { "Leap", (false, RootMotion.Translate) },
+            { "Death_Lying", (false, RootMotion.Translate) },
         };
 
         // Speed blend tree children and their root speeds in m/s (export values; the thresholds use the root speed Unity
@@ -54,9 +55,13 @@ namespace CalfAsset.EditorTools
         // the FBX has them: Stand is a 0 m/s clip exactly as long as Walk_Slow_RM, so that pair blends at w x 0.45 m/s.
         // Idle is NOT a child: Unity plays the weighted average of the children's lengths, and the 3.3 s Idle stretched
         // the 0.8 s walk cycle (Speed 0.46 gave 0.18 m/s). It is its own state instead.
-        static readonly (string clip, float speed)[] Locomotion =
+        // timeScale != 1 adds a time-scaled copy of a gait: Trot_RM x1.37 (= 3.2 m/s) and Gallop_RM x0.82 (= 3.6 m/s) keep
+        // the Trot/Gallop crossfade inside 3.2-3.6 m/s. The two gaits have different footfall patterns, so blending them
+        // over the whole 2.34-4.39 m/s range made the legs cross (review A1).
+        static readonly (string clip, float speed, float timeScale)[] Locomotion =
         {
-            ("Stand", 0f), ("Walk_Slow_RM", 0.45f), ("Walk_RM", 0.93f), ("Trot_RM", 2.34f), ("Gallop_RM", 4.39f)
+            ("Stand", 0f, 1f), ("Walk_Slow_RM", 0.45f, 1f), ("Walk_RM", 0.925f, 1f), ("Trot_RM", 2.34f, 1f),
+            ("Trot_RM", 2.34f, 1.37f), ("Gallop_RM", 4.39f, 0.82f), ("Gallop_RM", 4.39f, 1f)
         };
         const float SpeedStart = 0.1f, SpeedStop = 0.05f;     // Idle -> Locomotion above 0.1 m/s, back below 0.05 m/s
 
@@ -406,11 +411,20 @@ namespace CalfAsset.EditorTools
             var loco = sm.AddState("Locomotion", new Vector3(250, 160));
             loco.motion = tree; loco.tag = ReadyTag;
             bool slow = Clip(fbx, "Walk_Slow_RM") != null;
-            foreach (var (clip, speed) in Locomotion)
+            foreach (var (clip, speed, timeScale) in Locomotion)
             {
                 if (clip == "Stand" && !slow) continue;           // Stand only pairs with the equally long Walk_Slow_RM
                 var c = Clip(fbx, clip);
-                if (c) tree.AddChild(c, speed == 0f ? 0f : RootSpeed(c, speed));
+                if (c)
+                {
+                    tree.AddChild(c, speed == 0f ? 0f : RootSpeed(c, speed) * timeScale);
+                    if (timeScale != 1f)
+                    {
+                        var ch = tree.children;                   // ChildMotion is a struct: edit the copy, assign it back
+                        ch[ch.Length - 1].timeScale = timeScale;
+                        tree.children = ch;
+                    }
+                }
                 else if (clip != "Stand" && clip != "Walk_Slow_RM") Debug.LogWarning($"[Calf] clip {clip} missing for locomotion");
             }
             Go(idle, loco, 0.25f, false)?.AddCondition(AnimatorConditionMode.Greater, SpeedStart, "Speed");
@@ -437,12 +451,19 @@ namespace CalfAsset.EditorTools
             Leave(gE, 0.2f, 0.95f);
             standing.AddRange(new[] { gS, gL, gE });
 
-            // lying: LieDown -> Lying_Idle (while Lie) -> GetUp. No lying death clip: Die waits until the calf stands.
+            // lying: LieDown -> Lying_Idle (while Lie) -> GetUp; Die while down plays Death_Lying (starts from the lying pose)
             var lD = State("LieDown", 550, -180); var lI = State("Lying_Idle", 800, -180); var lU = State("GetUp", 1050, -180);
             Enter(lD, 0.2f, AnimatorConditionMode.If, "Lie");
             Go(lD, lI, 0.05f, true, 0.98f);
-            Go(lI, lU, 0.1f, false)?.AddCondition(AnimatorConditionMode.IfNot, 0, "Lie");
+            Go(lI, lU, 0.35f, false)?.AddCondition(AnimatorConditionMode.IfNot, 0, "Lie");   // 0.1 s popped (review A7)
             Leave(lU, 0.2f, 0.95f);
+            var deadLying = State("Death_Lying", 1050, -60, DeadTag);
+            if (deadLying != null)
+                foreach (var s in new[] { lD, lI }.Where(s => s != null))
+                {
+                    Go(s, deadLying, 0.3f, false).AddCondition(AnimatorConditionMode.If, 0, "Die");
+                    s.transitions = s.transitions.OrderBy(t => t.destinationState == deadLying ? 0 : 1).ToArray();
+                }
 
             // one-shots. Turns leave only when the root yaw is complete (exit time 1): during a blend the leaving state's
             // root motion is weighted out, so an early exit under-turns. They enter with a short blend for the same reason.
@@ -461,7 +482,7 @@ namespace CalfAsset.EditorTools
             if (death != null)
                 foreach (var s in standing.Where(s => s != null))
                 {
-                    Go(s, death, 0.15f, false).AddCondition(AnimatorConditionMode.If, 0, "Die");
+                    Go(s, death, 0.25f, false).AddCondition(AnimatorConditionMode.If, 0, "Die");   // 0.15 s snapped from grazing
                     s.transitions = s.transitions.OrderBy(t => t.destinationState == death ? 0 : 1).ToArray();
                 }
             EditorUtility.SetDirty(ctrl);

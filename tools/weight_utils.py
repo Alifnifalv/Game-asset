@@ -13,6 +13,8 @@ def get_weights(ob):
 
 
 def set_weights(ob, W, eps=1e-4):
+    W = np.where(W > eps, W, 0.0)                      # drop negligible weights, then renormalise the rest
+    W = W / np.maximum(W.sum(1, keepdims=True), 1e-12)
     for vg in ob.vertex_groups:
         vg.remove(list(range(len(ob.data.vertices))))
     for gi, vg in enumerate(ob.vertex_groups):
