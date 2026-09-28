@@ -13,7 +13,7 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 | New animation set | Gaits done: Walk/Trot/Gallop (RM + in place), TurnLeft90/Right90. Key-pose families in progress | `tools/calf_animations.py`, `tools/anim_lib.py`, `tools/anim_gait.py`, `tools/clips/` |
 | Export rig | Hooves re-parented under the lower legs for engine blending (world motion unchanged, 0.000 mm) | `anim_lib.reparent_hooves_for_export` |
 | Unity setup script | Written; can't be compiled here, needs one Unity check | `Unity/Calf/Editor/CalfSetup.cs` (menu Tools > Calf > Setup Calf Asset) |
-| Key-pose clip families | In progress (workflow: author → adversarial review → fix): idle_graze, lying, actions | `tools/clips/*.py` |
+| Key-pose clip families | Workflow author → adversarial review → fix. idle_graze (review: pass), lying (fixed after review), actions (Death/Leap fixed after review, HeadShake passed) | `tools/clips/*.py` |
 | Fur (optional, URP) | Shader + component + fur mask/noise textures written; needs a Unity compile check | `Unity/Calf/Fur/`, `tools/calf_fur_textures.py` |
 
 ## Log
@@ -292,3 +292,85 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
   - GetUp's left-fore plant is the tightest joint (−61°).
   - Hind swings lift only 1–2 cm (more lift over-folds the hock while the rump is down).
   - Folded fore legs still hide their cannons during the transition frames.
+
+### 2026-09-28: actions clip family reworked after its review (fixes 9fe4076: 4 major + 6 minor)
+**What:** `tools/clips/actions.py`: Death rebuilt around a physical topple, the Leap landing re-derived, the QA
+extended. HeadShake is unchanged (it passed the review). `Unity/Calf/Editor/CalfSetup.cs`: Death is now
+`RootMotion.Translate` (it has root motion). `Unity/Calf/README.md` root-motion notes updated for Leap/Death.
+Run: `python3 tools/clips/actions.py --no-render` (~6 s: builds on `build/stage_b.blend`, prints QA, saves
+`<scratchpad>/actions/test.blend`); drop `--no-render` for strips + GIFs (~5 min).
+
+**Death: how it works now** (`DeathModel`, all world space, then made root-relative):
+- Flinch f0-4 → right-fore (f3-9) and right-hind (f5-11) stagger steps with the body swaying right → from f11 the
+  body topples **over the right hooves**: a rigid pendulum about the right hooves' lateral sole edges (gravity,
+  k = 0.15 m, time-scaled to land exactly at f33), plus 3 cm of leg give. Rotating about a pivot is written as
+  anim_lib's rotation about the COG plus moving the COG on the arc. The pre-topple curves hand over at f11 with
+  matching position and velocity.
+- The right hooves never slide. They tip onto their lateral wall about the LOD0 lateral sole edge (`_HOOF_EDGE`,
+  fetlock = W − q·edge). The left legs unload at f11/12, rise first and then follow the trunk, keeping the leg shape
+  they had at lift-off. At f25-40 they flop in the trunk frame into the dead pose, in front of the lower legs.
+  The upper-hind twitch at f40-53 moves forward and up, away from the lower leg.
+- Root motion: the Root drifts 0.79 m to the calf's right (f9-41), so it ends under the carcass (the COG path
+  demands it: straight legs pivoting on planted hooves land the body ~0.75 m to the side, as in the GiM reference).
+- Hoof orientation: a basis hook for the planted, stepping and tipping hooves. A **post-bake pass** orients the limp
+  upper hooves from the baked cannon (plus a relaxed flex about the cannon's hinge axis), so the fetlock never
+  bends sideways. The orientation only exists after IK, so Death is built 3 times (`DEATH_PASSES`); each pass feeds
+  the previous pass's cannon orientation into the ground clamp. f60-70 is exactly `dead_pose(calf, root_end)`.
+- `dead_pose(calf, root=None)` is root-relative (body_off.x = 0). A future Dead_Idle clip must reuse `death_fn`'s
+  hook/post functions to get the same hoof orientation.
+
+**Leap: how it works now:**
+- The landing is expressed as front (elbow line) and rear (hip line) height keys (`LEAP_HF`/`LEAP_HR`, handover
+  from the flight curves at f19), plus a neck lag (`LEAP_NECK_LAG`). The values come from an optimisation (scratch
+  `leapopt2.py`, not committed) with these constraints: COG exactly ballistic until the fore contact; fore leg
+  ≤ 12-17 mm compressed at contact and ≤ ~50 mm after it; the rear cannot decelerate while both hind feet are in
+  the air; hip no more than 9 cm below rest; smooth head, pitch, elbow and hip.
+- Fore feet land 8 cm short of their final spot (`LEAP_SHORT`) and take a small balancing step (LF f31-36,
+  RF f33-38). This gives a smaller leg angle at contact, so less stiff-leg vault rebound, and the spot is reachable
+  one frame early. The last 3 airborne frames are world-anchored keys (`tdw`), so the hooves decelerate and come
+  down almost vertically.
+- Hind feet now land at f26/27 (was 29/30): after the fore contact the rear keeps falling, faster than g, and cannot
+  be held in the air for 5 frames. The hind legs trail and kick back right after take-off (f15-19), then swing
+  through. Hind toe-off: the hooves roll onto the toe tip over the last 3 planted frames (`toe_pivot_fetlock`, which
+  accounts for the toe bone's extra 0.35·flex). The first swing key follows 55% of the root's advance (`offw`), so
+  there is no velocity kink and no reach clamp at lift-off.
+
+**Review findings → result** (my QA plus the reviewer's own scripts re-run on the new build):
+| Finding | Before | After |
+|---|---|---|
+| Death fore fetlock hyperextension while loaded | LF 89°, RF 102° | LF 52°, RF 56° (limit ~60; rest 28/31) |
+| Death hooves skating in the topple (LOD0 in-contact slide, total) | RH 509, LF 214, RF 140 mm | RH 10, RF 8-10, LF 0-9, LH 7 mm; rolling hooves ≤ 0.8 mm/f |
+| Death dead-pose leg interpenetration | 25 mm capsule overlap, 14+6 LOD2 pairs | 0 LOD2 limb pairs on every frame; capsule clearance ≥ 22 mm |
+| Leap fore touch-down rebound | head −75 → +92 mm/f (167 mm/f²); Body 6.5°/f² | head −56, −28, −9, −2, 0, +4 mm/f (≤ 28 mm/f²); Body 4.5°/f² |
+| Death tail tip in the lower gaskin | 29-32 mm overlap | tail lies on the ground behind the legs (min z 0.9 cm, capsules clear) |
+| Death sideways fetlock bend | 35-51° | ≤ 6° on every frame |
+| Death stagger-step hoof flick | FF.R 40.6°/f² | 11.3°/f² (flex 15·h²); SMOOTH now lists the top 4 per-bone pops |
+| Leap lead-fore hoof slap (last airborne frame) | 50 mm (reach-clamped 2.3 cm) | LF 15, RF 15, hind 18 mm; no reach clamp |
+| Stale docstring | 72 f / 42 f / 15 cm apex | rewritten (clips, conventions, extensions, QA) |
+| Death root motion / slow collapse | none; 35 f to impact | 0.79 m; impact f33 (topple f11-33 is gravity-timed) |
+| (found here) Leap hind take-off fetlock | RH 67.5°, BackLowerLeg.R 44.6°/f², IKBackLeg.R 96 mm/f² | 49°, 25.6°/f², no lift-off kink |
+
+- Unchanged and still exact: IK gap ≤ 0.04 mm; flat-planted slide ≤ 0.01 mm; every start = Pose() (0.0000 mm);
+  Leap/HeadShake end = Pose() root-relative (≤ 0.0007 mm); Death f60 = f70; raw-vs-shared residual ≤ 6e-8; Leap
+  root 1.447 m; carpus/hock always anatomical (Death carpus 15-68°, hock 47-83°; Leap 15-114° / 18-115° in flight).
+- Ground: Death LOD2 non-hoof min −1.06 cm (the trunk at the impact, f33); dead pose ≈ 0; head ≥ 0.26 cm. Hoof
+  verts ≥ −0.8 cm (LOD2 cage around the LOD0 pivot edge). Every leg keeps ≥ 23 mm reach margin while resting.
+- New QA lines in `run_qa`: CONTACT (LOD0 hoof skating; rolling on an edge passes, sliding fails), OVERLAP (LOD2
+  limb/tail self-intersections + bone capsules), FETLOCK (signed dorsal angle, max while loaded, out-of-plane),
+  REACH for all resting legs in Death, top-4 SMOOTH pops.
+
+**Gotchas (useful for other families):**
+- An unreachable foot target is silently clamped by anim_lib. In the lying pose the upper legs' shoulder/hip is
+  25-30 cm up, so they reach less far than the lower legs. Check reach for **every** leg in held poses.
+- Trunk-following hoof orientation gives sideways fetlock bends. Follow the baked cannon instead (post-bake pass).
+- Ballistic flight + fore contact: the rear accelerates down faster than g, so the hind feet must land within
+  ~2 frames. At 2.7 m/s and 30 fps a hoof can only arrive with ~0 world speed if its spot is reachable one frame
+  early: land short and correct with a step.
+- Tail signs lying on the right side: side + = toward the ground, lift + = tip swings back (+Y).
+
+**Open:**
+- Death's topple from tipping start to impact is 22 frames (gravity from a 5° lean at 1.5°/f). The GiM reference
+  drops in ~13-15 frames with a looser, leg-splaying collapse.
+- CalfSetup.cs (Death → Translate) needs the usual Unity compile check. No in-place Leap and no Dead_Idle loop.
+- Leap: the hind hocks absorb to ~85-89° for 2-3 frames after landing. The Death trunk impact is a one-frame stop
+  (Body tail point 143 mm/f² at f33; intended).

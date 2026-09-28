@@ -108,12 +108,14 @@ settings should be and why, and flag where the script differs.
     | Clip type | Root Rotation | Root Position (Y) | Root Position (XZ) |
     |---|---|---|---|
     | In place (Idle, Eating, Walk, Trot, Gallop) | Bake Into Pose, Based Upon Original | Bake Into Pose, Original | Bake Into Pose |
-    | Root motion (`*_RM`) | Bake Into Pose, Original | Bake Into Pose, Original | **not baked**: the Animator (Apply Root Motion) moves the GameObject |
+    | Root motion (`*_RM`, Leap, Death) | Bake Into Pose, Original | Bake Into Pose, Original | **not baked**: the Animator (Apply Root Motion) moves the GameObject |
     | Turns (TurnLeft90/Right90) | **not baked**: the GameObject turns | Bake Into Pose, Original | Bake Into Pose |
   - Measured Root motion per cycle in Unity space:
     - Walk_RM: +0.74 m in Z. Trot_RM: +1.25 m in Z. Gallop_RM: +2.05 m in Z.
     - At 30 fps that is 0.93, 2.34 and 4.39 m/s, the same as the Speed blend-tree thresholds in `CalfSetup.cs`.
     - TurnLeft90: -90° yaw (to the left). TurnRight90: +90° yaw.
+    - Leap: 1.45 m forward (+Z). Death: 0.79 m sideways to the calf's right (the body topples over its right hooves;
+      the GameObject follows so its collider ends under the carcass).
     - Every other clip: 0.
   - Idle and Eating never move Root, so the bake settings make no difference for them.
 - **Mirror:** Off. The rig is symmetric by name (`.L`/`.R`), but Generic clips cannot be mirrored anyway.

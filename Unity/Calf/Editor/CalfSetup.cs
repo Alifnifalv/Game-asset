@@ -34,7 +34,7 @@ namespace CalfAsset.EditorTools
             { "Graze_Start", (false, RootMotion.None) }, { "Graze_Loop", (true, RootMotion.None) }, { "Graze_End", (false, RootMotion.None) },
             { "Call", (false, RootMotion.None) }, { "HeadShake", (false, RootMotion.None) },
             { "LieDown", (false, RootMotion.None) }, { "Lying_Idle", (true, RootMotion.None) }, { "GetUp", (false, RootMotion.None) },
-            { "Death", (false, RootMotion.None) }, { "Leap", (false, RootMotion.Translate) },
+            { "Death", (false, RootMotion.Translate) }, { "Leap", (false, RootMotion.Translate) },
         };
 
         // locomotion blend thresholds (m/s) = clip root speeds from tools/anim_gait.py
