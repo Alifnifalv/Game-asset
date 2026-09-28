@@ -1,47 +1,39 @@
-# Young Cow (Calf) for Unity: Plan
+# Young Cow (Calf) for Unity: Build Plan
 
-Target quality: GiM Studio **Animalia - Cow (pack)** (Unity Asset Store #170739). References are in the repo root:
-`Gemini_Generated_Image_*.png`, `2259689e-*.webp`, `Young Cow animation preview.mp4`, `videoplayback (1).mp4` (young cow, 1080p),
-`videoplayback.mp4` (adult female cow).
+**Decision:** build in-house. Target quality and content: GiM Studio *Animalia - Cow (young)*.
+References are in the repo root: `Gemini_Generated_Image_*.png`, `2259689e-*.webp`, `Young Cow animation preview.mp4`,
+`videoplayback (1).mp4` (young cow, 1080p) and `videoplayback.mp4` (adult female cow).
+Everything is produced by Python scripts in `tools/`, which drive Blender 5 headless (`bpy`), so each stage is repeatable and tunable.
 
-## 1. Build or buy
+## Deliverable (what "done" means)
 
-| | Animalia Cow (GiM) | This repo's calf (built from `cow.glb`) |
-|---|---|---|
-| Cost | Young cow $99.99, pack (female + young) €165.60 (store prices at time of writing) | Free; you own the result (check `cow.glb`'s Sketchfab licence) |
-| Mesh | Sculpted high-poly baked to game mesh, LODs | Reshaped low-poly cage, subdivided (LOD0 ~47k tris) |
-| Textures | 4K, photo-sourced, semi-procedural shader, gFur fur | Procedural red-pied coat, 4K BaseColor/Normal/Mask |
-| Rig | Production rig with Maya/Max animation rigs, ragdoll | Original 43-bone quadruped rig, IK baked to FK |
-| Animations | Full set at 60 fps, with and without root motion | 2 clips (Eating, Idle) carried over |
+| Area | Target |
+|---|---|
+| Mesh | Young cow, real scale (~1.0 m withers), LOD0 ~45k tris, LOD1 ~12k tris, LOD2 ~2.7k tris; eyes as separate spheres |
+| Textures | 4K BaseColor / Normal (OpenGL) / HDRP MaskMap / URP MetallicSmoothness; eye texture; red-pied coat matching the refs |
+| Fur | Unity shell-fur material for LOD0 (URP), plus alpha fur cards for the forehead tuft, ear fringe and tail switch |
+| Rig | Existing 43-bone quadruped rig (kept for compatibility) + Jaw + Ear.L/R bones; Generic rig in Unity with `Root` as the root node |
+| Animations | Walk, Trot, Gallop, TurnLeft/TurnRight, Idle, Idle_LookAround, Graze_Start/Loop/End, Eating, LieDown, Lying_Idle, GetUp, Death, Leap. Locomotion exported with and without root motion. 30 fps |
+| Unity | FBX + textures; Editor script that builds materials, the LODGroup, an Animator Controller (speed/turn blend tree + states) and a prefab |
 
-**Recommendation:** if the calf is a close-up or hero animal in an AAA-looking game, **buy the Animalia pack**.
-Matching it in-house takes a sculpt, retopology, bake, Substance texturing, fur grooming, and a 20+ clip animation set.
-That is roughly 6–10 weeks for a senior creature artist plus a creature animator, which costs far more than the asset.
-Use the calf built here as a free placeholder, a background/herd animal, or a far LOD, and as a pipeline you control.
+## Phases
 
-## 2. What the Animalia young cow has that this calf does not (gap list)
+1. **Model.** Reshape the adult cow cage into a calf (`calf_stage_a.py`, `calf_stage_b.py`). Done: proportions matched to the side-view silhouette, eyes, UVs, LODs.
+2. **Textures.** Procedural coat from a baked rest-position map (`calf_textures.py`): white blaze, shoulder band, belly, hip band, white lower legs, tail switch, pale muzzle and hooves, and a fur-direction normal map.
+3. **Rig upgrade.** Add Jaw (chewing while grazing) and Ear.L/R (ear flicks), with weights from head-region distance fields. Re-add leg IK (chains to the IKFrontLeg/IKBackLeg targets) as a Blender authoring rig, and bake to FK for export.
+4. **Animation set.** Built by a procedural quadruped gait generator:
+   - Foot phase offsets: walk is a lateral 4-beat, trot diagonal pairs, gallop a transverse 4-beat with suspension.
+   - Foot arcs are solved with IK. The spine, neck and head counter-motion and the tail sway follow the gait phase.
+   - Stride length and cadence are tuned per gait at calf scale.
 
-1. **Anatomy.** Muscle and bone landmarks (scapula, hip points, knees, hocks), skin folds on the neck, and a sculpted face with eyelids, nostrils and lips. Here they are only approximated by the silhouette and normal-map detail.
-2. **Fur.** GiM uses gFur shells plus fur-strand textures. Unity options: a URP/HDRP shell-fur shader (8–16 shells on LOD0 only), or hair cards for the forehead tuft, ear fringe and tail switch.
-3. **Animation set.** From the preview videos: walk, trot, canter/gallop, leap, graze (head down, loop), eat, idle, look around, ear/tail secondary motion, lie down, lying idle, get up, death. Every locomotion clip comes with and without root motion.
-4. **Rig.** Ear, jaw, eyelid and tail-dynamics bones, plus a ragdoll setup.
+   Poses and transitions (graze, lie down, get up, death, leap) are keyframed from key poses with IK. A cow gets up **hind end first** and lies down **front knees first**.
+   Loops are checked for seamless first/last frames. Root-motion versions move `Root`; in-place versions keep it at the origin.
+5. **Fur and shading.** URP shell-fur shader (8–16 shells, density/length from a fur mask) on LOD0; fur cards generated in Blender.
+6. **Unity integration.** Exporter + validator (`export_unity.py`, `validate_export.py`), plus a Unity Editor setup script and `Unity/Calf/README.md`.
+7. **Review.** Multi-lens adversarial review of each phase: visual match to the refs, rig/skin integrity, animation quality (foot sliding, ground contact, loop seams), Unity import readiness.
 
-## 3. Animation plan (next phase)
+## Known limits of this approach (and mitigations)
 
-Tooling: Blender (installed as the `bpy` Python module in the cloud container) for procedural and keyframed clips. For hand-keyed polish, use Blender with Rigify or AutoRig Pro on a workstation. Mocap for quadrupeds is rarely worth the cost.
-
-| Priority | Clip | Method | Notes |
-|---|---|---|---|
-| P0 | Walk (in place + root motion) | Procedural gait generator: foot phase offsets (LH, LF, RH, RF lateral sequence), foot arcs with IK, spine/neck counter-motion, head bob | Lets the calf move in game at all |
-| P0 | Trot | Same generator, diagonal pairs | |
-| P0 | Idle variations | Layer ear flicks, tail swish, breathing, weight shifts on the existing Idle | Cheap and adds life |
-| P1 | Graze loop | Neck/head down pose + jaw/chew cycle (needs a jaw bone) | Existing "Eating" clip covers part of this |
-| P1 | Lie down / lying idle / get up | Key poses + IK, hand-tuned | Needs the most animator time |
-| P2 | Gallop, leap, turn in place, death | Keyframed | |
-
-Unity side: Generic rig, `Root` as root node. Build an Animator Controller with a speed blend tree (idle → walk → trot → gallop) and a turn parameter. Use root motion for locomotion, and foot IK (Animation Rigging package, TwoBoneIK per leg with a ground raycast) for uneven terrain. Use a LODGroup built from `Calf_LOD0..2`.
-
-## 4. Calf model pipeline in this repo (current phase)
-
-`tools/calf_stage_a.py` → `tools/calf_stage_b.py` → `tools/calf_textures.py` → `tools/export_unity.py` → `tools/validate_export.py`.
-See `Unity/Calf/README.md` for the import settings and `docs/CALF_PIPELINE.md` for how each stage works and how to tune it.
+- **No sculpted high-poly.** Anatomy comes from the reshaped cage plus procedural normal detail. Mitigation: add anatomical landmarks (shoulder, hip points, knees, hocks, neck folds) as displacement baked into the normal map.
+- **Unity isn't available in this container.** C# and shaders are written against the documented URP/Unity APIs but can't be compiled here. Plan one Unity import pass on a dev machine to confirm them.
+- **Animation is procedural plus key poses, not mocap.** Gaits are physically structured and cleanly looped. Transitions will need an animator's polish pass for hero close-ups.
