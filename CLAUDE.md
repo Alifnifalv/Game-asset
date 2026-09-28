@@ -34,28 +34,37 @@ pip install "numpy<2" pillow "opencv-python-headless<4.11" imageio imageio-ffmpe
 - Unity is **not** available here. C#/shaders can't be run, so flag them as needing a Unity check.
 
 ## Pipeline
-**One command:** `bash tools/build_all.sh` (375 s measured: the 4K textures take 276 s, the validator 54 s). It logs each
-step to `build/logs/<step>.log` and ends with the validator summary. It **rewrites the git-tracked `Unity/Calf/`**.
-The steps, in order:
+**One command:** `bash tools/build_all.sh` (422 s measured on the final-review build: the 4K textures take 276 s, the
+validator 89 s). It logs each step to `build/logs/<step>.log`, ends with the validator summary and keeps a timestamped
+copy of the validator log and report (`build/logs/validate-<stamp>.log`). It writes no log of its own output: redirect it
+(the final-review run is `build/logs/build_all_run2.out`; `build_all.log` is checkpoint 01's). It **rewrites the
+git-tracked `Unity/Calf/`**. The steps, in order:
 ```bash
 python3 tools/calf_stage_a.py      # cow.glb -> build/stage_a.blend: strip hierarchy, remove horns/udder, join+weld, quads, clean bone names
 python3 tools/calf_stage_b.py      # -> build/stage_b.blend: calf reshape (warp mesh + rest bones together), hoof soles on z=0, jaw/ear
-                                   #    bones, weight smoothing, eyes, UVs (packed), meters, 30 fps retime, LOD0/1/2 via subdivision
+                                   #    bones, ears/eyes/tail switch/forehead tuft, weight smoothing + tail/brisket repaint, UVs (packed),
+                                   #    meters, 30 fps retime, LOD0/1/2 via subdivision, every LOD limited to 4 influences
 python3 tools/calf_textures.py --in build/stage_b.blend --out build/stage_c.blend --tex-dir build/textures --res 4096
 python3 tools/calf_fur_textures.py --in build/stage_b.blend --tex-dir build/textures
-python3 tools/calf_animations.py --in build/stage_c.blend --out build/stage_d.blend   # all clips (anim_lib + tools/clips/*)
-python3 tools/export_unity.py --in build/stage_d.blend --out-dir Unity/Calf --tex-dir build/textures
+python3 tools/calf_animations.py --in build/stage_c.blend --out build/stage_d.blend   # all 25 clips (anim_lib + tools/clips/*);
+                                   #    QA gate: exits 1 on a violation; writes its IK re-bake next to --out (build/stage_d_rebaked.blend)
+python3 tools/export_unity.py --in build/stage_d.blend --out-dir Unity/Calf --tex-dir build/textures   # FBX + 4K Textures/, GLB with 2K textures
 python3 tools/validate_export.py --fbx Unity/Calf/Calf.fbx --glb Unity/Calf/Calf.glb --src build/stage_d.blend \
         --json build/logs/validate_report.json --render-dir build/export_check      # build_all adds these two flags
 ```
-**Fast clip QA** (about 5 s each; each builds its clips on `build/stage_b.blend`, prints QA and saves `test.blend` in the
-directory you pass). Always pass the output flag: the default is a path from the session that wrote the module.
+**Fast clip QA** (5-8 s each; each builds its clips on `build/stage_b.blend`, prints QA and saves `test.blend` in the
+directory you pass). Always pass the output flag: the default is a path from the session that wrote the module (OI-31).
+`locomotion.py` and `imported_fix.py` save nothing unless you pass `--out`.
 ```bash
 python3 tools/clips/idle_graze.py --no-render   --out-dir <scratch>/idle_graze
 python3 tools/clips/actions.py    --no-render   --out-dir <scratch>/actions
 python3 tools/clips/lying.py      --render none --scratch <scratch>/lying      # its default --render all takes ~10 min
+python3 tools/clips/locomotion.py                           # Stand, Walk_Slow(_RM), turns + TURN/BLEND QA; saves only with --out <existing dir>/x.blend
+python3 tools/clips/imported_fix.py --in build/stage_d_rebaked.blend   # Idle/Eating repair QA; the default --in (build/stage_b_rebaked.blend) is stale
 ```
-Drop the no-render flag to get filmstrips and GIFs (3.5-10 min per family).
+Drop the no-render flag to get filmstrips and GIFs (3.5-10 min per family). `imported_fix.py` needs the IK re-bake of the
+current stage B: `build/stage_d_rebaked.blend` from the last build, or `python3 tools/rebake_leg_ik.py --in
+build/stage_b.blend --out <scratch>/rebaked.blend --actions Eating,Idle`.
 
 Check tools:
 - `tools/render_views.py`: contact-sheet stills (`--action NAME --frame N`). After an FBX import Blender names the
@@ -71,47 +80,57 @@ Check tools:
   after the build once left `validate.log` at 172 PASS while `build_all.log` said 175). Give re-exports and validator
   runs a scratch `--out-dir` / `--json` / `--render-dir`. If you did overwrite them, re-run the full build before
   committing.
-- **Do not run `calf_animations.py` twice at once, and do not rely on `--out` to keep it out of `build/`.** It always
-  writes `build/stage_b_rebaked.blend` (OI-27).
-- **Do not use `build_all.sh --skip-textures` after a stage-B change.** It re-runs stages A/B but keeps the old
-  `build/stage_c.blend`, which is a full copy of the *previous* stage B plus materials. The animations and the FBX are
-  built from it, so the stage-B edit is silently lost (OI-28). `--skip-textures` is only safe when stage A/B did not
-  change.
+- **Do not run two `calf_animations.py` with the same `--out` at once.** Each writes its IK re-bake to
+  `<out>_rebaked.blend` (a scratch `--out` keeps it out of `build/`; OI-27 is fixed). `build/stage_b_rebaked.blend` is a
+  stale leftover from before that fix.
+- **Use `build_all.sh --skip-textures` only when stage B's geometry and UVs did not change** (e.g. a weight edit). It
+  keeps the old textures and re-links their materials onto the new stage B (`tools/relink_materials.py`); it refuses
+  (exit 2) when the LOD0 UVs changed (OI-28 is fixed). After a shape change, re-bake the textures: the coat follows
+  mesh landmarks.
 - **Do not commit a build made with `--tex-res 2048`.** The export copies whatever is in `build/textures` into
-  `Unity/Calf/Textures`, and the validator does not check resolution (OI-29). Before committing, check that
+  `Unity/Calf/Textures`, and the validator does not check their resolution (OI-29; its texture-memory check covers only
+  the GLB, which is reduced to 2048 on purpose). Before committing, check that
   `python3 -c "from PIL import Image; print(Image.open('Unity/Calf/Textures/T_Calf_BaseColor.png').size)"` prints `(4096, 4096)`.
 - Do not modify the reference media or `cow.glb`.
 
 ## Verification gate
 A state is **verified-good** (and may become a checkpoint) when:
-1. `bash tools/build_all.sh` finishes (every step prints `ok`).
-2. The validator reports **0 FAIL** (`SUMMARY:` line in `build/logs/build_all.log`; it exits 1 on any FAIL). Checkpoint 01:
-   175 PASS / 0 FAIL / 1 WARN. The only accepted WARN is the 4-influence skin deviation (23.7 mm at Gallop f14).
-3. The build's clip QA (`QA <clip>:` lines in `build/logs/animations.log`) and each family's fast QA (commands above)
-   are within the limits below.
+1. `bash tools/build_all.sh` finishes (every step prints `ok`). The animations step fails (exit 1) on a QA-gate violation.
+2. The validator reports **0 FAIL** (the `SUMMARY:` line at the end of `build/logs/validate.log`, also printed by
+   `build_all.sh`; it exits 1 on any FAIL). Final-review build (checkpoint 02): **267 PASS / 0 FAIL / 0 WARN**. No WARN
+   is expected any more: read any WARN line before checkpointing. (Checkpoint 01's 175 / 0 / 1 came from an older,
+   smaller validator.)
+3. `build/logs/animations.log` shows `QA GATE: pass (25 clips)`, and the other QA lines of the build and each family's
+   fast QA (commands above) are within the limits below.
 4. The working tree is clean after the commit (the build rewrites `Unity/Calf/`, so commit it).
 
-Nothing computes a pass/fail verdict for the clip QA yet (OI-30): read the lines against this table.
+The `QA GATE` in `calf_animations.py` checks, for every clip: IK gap, planted slide on the `_RM` gaits, loop seams on the
+cyclic clips, and knees/hocks bending backward (by more than 0.5°, the noise on straight legs). Nothing else fails the
+build: read the other lines against this table.
 
-| QA line | Limit | Known values that are fine (checkpoint 01) |
+| QA line | Limit | Known values that are fine (final-review build) |
 |---|---|---|
-| `QA … IK gap` | ≤ 0.1 mm | Idle 2.27 mm: the source `cow.glb` clip cannot reach there either |
-| `QA … planted slide` | ≤ 0.1 mm | The build log measures only Walk_RM/Trot_RM/Gallop_RM; the other clips print 0.00 **without measuring** (OI-30). The family QAs measure their own clips. |
-| `QA … fetlock loop seam` | 0.00 mm on loops | Meaningless on one-shots: Graze_Start/End 60 mm (the left fore steps 6 cm), LieDown/GetUp 182 mm, Death 669 mm (ends on its side, 0.79 m away) |
-| `QA … pastern drop below rest` | information only | Hoof flex/roll: gaits -1.5 to -4.2 mm, lying -5.8 mm, Death -6.8 mm |
-| `BOUNDARY`, `SEAM`, `HOLD`, `RESIDUAL` (families) | ≤ 0.001 mm / 0.001° (residual ≤ 1e-7) | Leap end vs `Pose()` 0.0004 mm root-relative (float round-off); all others 0.0000 |
+| `QA … IK gap` | ≤ 0.1 mm (gate; Idle ≤ 3 mm) | Idle 2.27 mm: the source `cow.glb` clip cannot reach there either; all others ≤ 0.05 mm |
+| `QA … planted slide` | ≤ 0.1 mm (gate, `_RM` gaits) | Measured only on Walk_Slow_RM/Walk_RM/Trot_RM/Gallop_RM (flat-hoof stance: the toe roll-off is not slide). The other clips print 0.00 **without measuring** (OI-30); the family QAs measure their own, and `imported_fix` measures Idle/Eating (`QA Idle (planted = fetlock <2 mm up)`). |
+| `QA … fetlock loop seam` | ≤ 0.01 mm on loops (gate) | Meaningless on one-shots: Graze_Start/End 60 mm (the left fore steps 6 cm), LieDown/GetUp 182 mm, Death 669 mm (ends on its side, 0.79 m away), Death_Lying 436 mm |
+| `QA … pastern drop below rest` | information only | Standing clips and gaits -0.0 mm; lying -5.8 mm; Death -6.8 mm; Death_Lying -13.4 mm |
+| `EATING fix`, `QA Eating nose pad` (imported_fix) | nose pad min ≥ 1.5 cm (prints OK/BELOW) | LOD2 3.50 cm (the solve target), LOD0 3.83 cm (f92); f0 vs f180 0.0000 |
+| `MESH … nose pad` (idle_graze) | no verdict; keep ≥ ~1.5 cm, as Eating | Graze_Loop 2.62-4.29 cm (LOD2); Graze_Start min 2.83, Graze_End min 3.10 |
+| `TURN` (locomotion, also in the build log) | ends vs `Pose()` ≤ 0.001 mm; planted hoof within ~12° of the body yaw; LOD2 body and hooves never below rest | f56 0.0003 mm; root yaw ±90.000°; carpus 6.5-65.9°, hock 45.3-66.1° |
+| `BLEND` (locomotion) | information only: a simulated Unity 1D blend of neighbouring children (plain Trot/Gallop pair) | Trot/Gallop w=0.5: skate 9.8 cm, fetlock -41 mm, same-side hoof tips ≥ 7.7 cm (1.3 cm at w=0.75). Stand/Walk_Slow w=0.25: skate 27.9 cm (blending with a static pose; 0-0.2 m/s only). `CalfSetup.cs` confines the Trot/Gallop crossfade to 3.2-3.6 m/s with time-scaled children, which this QA does not simulate. |
+| `BOUNDARY`, `SEAM`, `HOLD`, `RESIDUAL` (families) | ≤ 0.001 mm / 0.001° (residual ≤ 1e-7) | Leap end vs `Pose()` 0.0004 mm and Death / Death_Lying start 0.0001 mm root-relative (float round-off); residual ≤ 6e-8; all others 0.0000 |
 | `JOINT` (lying) | must end with `JOINT limits: all OK` (loaded fore fetlock ≥ -65°, standing carpus ≤ 25°, stifle ≤ 140°, hock ≥ -150°) | GetUp LF fetlock -61.3° is the tightest |
-| `JOINTS` (idle_graze, actions) | carpus and hock bend > 0 (anatomical) on every frame | rest carpus 10.4°, rest hock 52.4° |
+| `JOINTS` (idle_graze, actions) | carpus and hock bend > 0 (anatomical) on every frame | rest carpus 10.4°, rest hock 52.4°; Death_Lying carpus 20.4-108.9°, hock 80.2-148.1° |
 | `FETLOCK` (actions) | loaded dorsal angle ≤ ~60° (rest front 28°, hind 14°) | Death RF 56° |
-| `MESH` / `GROUND` (Calf_LOD2) | standing clips: non-hoof min z = rest (2.60 cm); lying and impact frames ≥ -2 cm | Death -1.04 cm (f33 impact), Lying_Idle -0.9 cm |
-| `CONTACT` (actions) | a hoof may roll on an edge, not slide; totals ≲ 10 mm per hoof | Death 7-10 mm |
-| `OVERLAP` (actions) | 0 LOD2 limb/tail polygon pairs; bone-capsule overlap ≤ 0 mm | - |
-| `REACH` (actions) | ≤ 0 mm (> 0 = the foot target was clamped) | -0.4 mm |
+| `MESH` / `GROUND` (Calf_LOD2) | standing clips: non-hoof min z = rest (2.60 cm); lying and impact frames ≥ -2 cm | Death -1.04 cm (f33 impact), Death_Lying -1.19 cm (f25), Lying_Idle -0.9 cm. The dead head rests on the ground: head min Death -0.11 cm, Death_Lying -0.43 cm |
+| `CONTACT` (actions) | a hoof may roll on an edge, not slide; totals ≲ 10 mm per hoof | Death 7-10 mm. Death_Lying LF 108 / RF 80 / LH 28 / RH 37 mm: the limp legs slide during the roll (OI-40, open) |
+| `OVERLAP` (actions) | 0 LOD2 limb/tail polygon pairs; bone-capsule overlap ≤ 0 mm | Death -21.2 mm, Death_Lying -34.1 mm (clear). No such check runs on the gaits (Gallop legs cross: OI-36) |
+| `REACH` (actions) | ≤ 0 mm (> 0 = the foot target was clamped) | -0.4 mm; Death_Lying -5.7 mm |
 
 ## Conventions (every tool relies on these)
 - **Units and axes:** meters, Z up, and the calf **faces -Y** (Unity +Z after FBX export). Ground at z=0. Withers ≈1.0 m.
 - **Timing:** 30 fps. Actions use integer frames, with `use_frame_range` set and `use_cyclic` set for loops.
-- **Objects:** `CalfRig` (armature), with children `Calf_LOD0` (~47k tris), `Calf_LOD1` (~12k), `Calf_LOD2` (~2.7k). All LODs share one UV layout (`UVMap`).
+- **Objects:** `CalfRig` (armature), with children `Calf_LOD0` (~47k tris), `Calf_LOD1` (~12k), `Calf_LOD2` (~2.7k). All LODs share one UV layout (`UVMap`), and every vertex has at most 4 bone influences (stage B), so Blender previews deform exactly as Unity.
 - **Material slots:** `[0] M_Calf_Body`, `[1] M_Calf_Eye` (the exporter moves the body slot last for the fur). The face attribute `orig_part` holds 0 coat, 1 old light patches, 2 hooves, 3 nose pad, 4 eyeball.
 - **Bones** (46 in stage B/C/D: the 43 source bones + `Jaw`, `Ear.L/R`; `.L` is +X):
   - Main chain: `Root` (ground, at the origin; the root-motion node), `Body` (the body root: its head is near the ground
@@ -128,6 +147,8 @@ Nothing computes a pass/fail verdict for the clip QA yet (OI-30): read the lines
   There is no persistent IK rig in the .blend: anim_lib adds the IK constraints per clip (lower leg → foot bone, pole =
   PoleTarget bones, chain 2, pole angle auto-solved), **bakes them to FK** and removes them. Exported clips have no constraints.
   anim_lib clamps a foot target at 0.9985 × chain (the straight fore legs rest at 0.996), so `Pose()` equals the rest pose.
+  A pole guard (`Calf.POLE_MARGIN`, 15°) rotates a pole forward when the foot target comes close to it (it stopped the
+  Gallop right-fore knee flip); the validator's per-frame twist check FAILs any leg or hoof twist over 15° per frame.
 - **`anim_lib.Pose` signs** (checked by FK probes): `body_rot` = (pitch + nose down, roll + right side down, yaw + left);
   spine roll + = **left** side down; head roll + = left ear down; `ears` = (x + tip forward, y + tip down, z twist);
   `tail` = (side + = tip to the calf's **right** (-X), lift + = tip back/up); `flex` + = toe back.
@@ -150,9 +171,11 @@ pink inside with a fur fringe; the lying calf shows a white belly and legs with 
    LOD2 ground check and boundary/seam diffs), take `--out-dir` and a no-render flag, and default to a path under
    `build/` or a temp dir, never a session path. Add its fast QA command to "Pipeline" and its limits to the gate table.
 3. Unity: add the clip to `ClipSpec` in `Unity/Calf/Editor/CalfSetup.cs` (loop and root-motion kind; the Animator states
-   are hard-coded in `CreateController`, and a trigger one-shot from Idle/Locomotion is one entry in `OneShots`). Update
-   the clip, loop and root-motion tables and the Animator section in `Unity/Calf/README.md`.
-4. Run the full build and the gate, then update the WORKLOG status and open-issues tables.
+   are hard-coded in `CreateController`, a trigger one-shot from Idle/Locomotion is one entry in `OneShots`, and a Speed
+   blend-tree child is one row of `Locomotion`). Update the clip, loop and root-motion tables and the Animator section in
+   `Unity/Calf/README.md`.
+4. Run the full build and the gate (the build's `QA GATE` covers the new clips automatically), then update the WORKLOG
+   status and open-issues tables.
 
 **Change the coat** (`tools/calf_textures.py`)
 - Colours: the `C_*` constants in `_coat_chunk()` (`C_OR`, `C_OR_RED`, `C_OR_LT` orange; `C_WH`, `C_WH_GREY`, `C_DIRT`
@@ -174,7 +197,7 @@ pink inside with a fur fringe; the lying calf shows a white belly and legs with 
 ```bash
 python3 tools/export_unity.py --in build/stage_d.blend --out-dir <scratch>/Calf --tex-dir build/textures
 python3 tools/validate_export.py --fbx <scratch>/Calf/Calf.fbx --glb <scratch>/Calf/Calf.glb --src build/stage_d.blend \
-        --json <scratch>/validate_report.json          # 172 PASS / 1 WARN at checkpoint 01; --render-dir adds 3 checks
+        --json <scratch>/validate_report.json          # expect 0 FAIL / 0 WARN (~50 s); --render-dir adds the 4 render checks
 ```
 
 ## Blender 5 API gotchas

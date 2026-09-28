@@ -416,4 +416,5 @@ if __name__ == "__main__":
             calf.duplicate_in_place(act, g.name)
     print("family locomotion:", build(calf))
     if a.out:
+        os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         calf.save(a.out); print("saved", a.out)

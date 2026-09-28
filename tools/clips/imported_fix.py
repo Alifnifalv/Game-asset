@@ -29,10 +29,10 @@ Also: QA lines for the imported clips: a planted-foot function (fetlock within 2
 tools/calf_animations.py does not pass for them (it reported "planted slide 0.00 mm" for the sliding Idle), and the
 Eating nose pad (min z per LOD, non-hoof LOD2 min z, first vs last frame).
 
-Standalone: python3 tools/clips/imported_fix.py [--in build/stage_b_rebaked.blend] [--out DIR/test.blend]
+Standalone: python3 tools/clips/imported_fix.py [--in build/stage_d_rebaked.blend] [--out DIR/test.blend]
   (the input must already hold the re-solved Idle/Eating of the CURRENT stage B, e.g. a scratch copy made with
   python3 tools/rebake_leg_ik.py --in build/stage_b.blend --out <scratch>/rebaked.blend --actions Eating,Idle;
-  build/stage_b_rebaked.blend is only as fresh as the last calf_animations.py run)
+  build/stage_d_rebaked.blend (written next to calf_animations.py --out) is only as fresh as the last full build)
 """
 import argparse, math, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -284,7 +284,7 @@ def build(calf):
 if __name__ == "__main__":
     ROOT = os.path.dirname(TOOLS)
     ap = argparse.ArgumentParser()
-    ap.add_argument("--in", dest="src", default=os.path.join(ROOT, "build", "stage_b_rebaked.blend"))
+    ap.add_argument("--in", dest="src", default=os.path.join(ROOT, "build", "stage_d_rebaked.blend"))
     ap.add_argument("--out", default=None)
     a = ap.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:])
     calf = A.Calf(a.src)

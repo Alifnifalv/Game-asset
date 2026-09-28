@@ -25,6 +25,11 @@ Shared poses: `stand()` (== `Pose()`), `lying(calf)` (LYING), `lying_folded(calf
 Seams are exact (0.000 mm / 0.000 deg): LieDown end = Lying_Idle start/end = GetUp start; LieDown start and GetUp end
 equal a `make_clip(Pose())` frame.
 
+`Death_Lying` (in `tools/clips/actions.py`, not this module) also starts from `lying(calf)` with this family's pole rule
+(frame 0 = Lying_Idle f0 exactly), and its end hind feet are placed relative to LYING's. A change to LYING therefore
+changes Death_Lying: re-run the actions QA (BOUNDARY, OVERLAP). Its first 'agonal gasp' keys are absolute, so since the
+L5 head raise the head drops from f0 (41 -> 30 cm by f5) instead of lifting first (WORKLOG OI-35).
+
 `LYING` = sternal recumbency: the chest upright on the sternum, **both fore legs stretched forward on the ground** (the
 right hoof tucked in under the chin, as in the GiM reference 28-40 s), the pelvis rolled onto the right hip (`Back`
 roll -14 deg with a `Torso` counter-roll), hind legs folded to the left (left hind on top), tail hanging with a tip
@@ -88,7 +93,7 @@ bone midpoint z 0.557 m, back top 0.58 m, poll/ears up to 0.75 m). The lying bod
 - The front `FrontUpperLeg` weights cover a 16 x 27 cm block of the brisket, so a fully folded cannon (carpus 156 deg)
   disappears inside the forearm. Folded fore legs are fine in transitions, but a held pose should stretch them.
 
-## QA (`python3 tools/clips/lying.py --render none --scratch <scratch>`, final-review stage B: build/stage_b.blend of 2026-09-28 17:46, after the L5 retune)
+## QA (`python3 tools/clips/lying.py --render none --scratch <scratch>`, final-review stage B: measured on build/stage_b.blend of 2026-09-28 17:46 after the L5 retune; the lines it prints are identical on the rebuilt stage B of 18:16)
 | Check | LieDown | Lying_Idle | GetUp |
 |---|---|---|---|
 | IK gap / planted fetlock slide | 0.05 / 0.00 mm | 0.00 / 0.00 mm | 0.04 / 0.00 mm |
@@ -163,8 +168,8 @@ bones did not change); the mesh rows (LOD2 head region) are not.
 
 ## Known limitations / ideas
 - The lying calf lies 0.40 m behind its standing position (no root motion). Real cattle end up about there, and rise
-  forward again, but in Unity the collider/capsule may need an offset while lying. Alternative: root motion on
-  LieDown/GetUp.
+  forward again, but in Unity the collider/capsule may need an offset while lying (WORKLOG OI-10). Alternative: root
+  motion on LieDown/GetUp. (Death_Lying does have root motion: it ends 0.17 m to the right and 0.38 m back.)
 - The GetUp left-fore plant is the tightest joint: fetlock -61 deg around f98 (limit -65), and carpus about 100 deg
   while the chest is still low.
 - The hind swings lift only 1-2 cm at mid-move. More lift folds the hock past its limit while the rump is on the ground.

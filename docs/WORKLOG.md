@@ -3,22 +3,23 @@
 Newest status first, then a chronological log. Each entry: what, why, how it was verified, open issues.
 
 ## Current status (update on every milestone)
-State of **CHECKPOINT 01** (`137fb8b`; asset content = `cdcf752`; `tools/build_all.sh` run of 2026-09-28 15:00-15:07, 375 s).
-Every open item is in "Open issues" below (IDs `OI-nn`).
+State after the **final multi-lens review**: fixes integrated and rebuilt with `bash tools/build_all.sh` on 2026-09-28
+18:16-18:23 (422 s; its output is in `build/logs/build_all_run2.out`). It becomes **CHECKPOINT 02** when committed (hash
+pending, see "Checkpoints"). Every open item is in "Open issues" below (IDs `OI-nn`).
 
 | Area | State | Where |
 |---|---|---|
-| Geometry (calf reshape, eyes, UVs, LODs) | Done. LOD0/1/2 46,752 / 11,688 / 2,688 tris, one `UVMap`. 1.62 m long, 1.01 m high (withers), 0.69 m wide (ears). Hoof soles on z = 0 (LOD0 min z 0.2 mm). | `tools/calf_stage_a.py`, `tools/calf_stage_b.py` |
+| Geometry (calf reshape, eyes, UVs, LODs) | Done. LOD0/1/2 46,752 / 11,688 / 2,688 tris, one `UVMap`. 1.57 m long, 1.01 m high (withers; ear tips 0.97 m), 0.60 m wide (ears; body 0.41 m). Hoof soles on z = 0 (LOD0 min z 0.2 mm, no vertex below). Final review: smaller head (`head_scale` 0.97, `neck_deepen` 1.10), thin cupped ears (`ear_scale` 1.40), smaller eyes (`eye_open` 0.85, `eye_protrude` 0.25), tail switch, forehead tuft. | `tools/calf_stage_a.py`, `tools/calf_stage_b.py` |
 | Rig | Done. 46 bones (43 source + `Jaw`, `Ear.L/R`); lower-leg tails on the fetlock; 30 fps. Export rig (stage D, FBX, GLB): hooves re-parented under the lower legs (world change 0.000 mm), 42 bones (the 4 pole helpers are dropped). | `tools/calf_stage_b.py`, `anim_lib.reparent_hooves_for_export` |
-| Skin weights | Withers/neck smoothed (813faea). LOD0/LOD1 still carry up to 7 influences, which the exporter refits to 4 (OI-02). | `tools/calf_stage_b.py`, `tools/export_unity.py` |
-| Textures | Done at 4096: BaseColor, Normal, Roughness, AO, MaskMap (HDRP), MetallicSmoothness (URP); eye 1024; fur mask + noise. `T_Calf_Height` is authoring-only and not exported. | `tools/calf_textures.py`, `tools/calf_fur_textures.py` |
-| Animation set | Done: 21 clips. Idle and Eating (imported; leg IK re-solved: 0 mm hoof gap, except Idle front.R 2.3 mm, which the source cannot reach either), Walk/Trot/Gallop (in place + `_RM`), TurnLeft90/Right90, Idle_LookAround, Graze_Start/Loop/End, Call, HeadShake, LieDown, Lying_Idle, GetUp, Death, Leap. | `tools/calf_animations.py`, `tools/anim_lib.py`, `tools/anim_gait.py`, `tools/clips/` |
-| Key-pose clip families | Done and reviewed (author → adversarial review → fix): idle_graze passed with 8 minors open (OI-12..19); lying and actions fixed after review. The family QAs reproduce on the checkpoint (seams 0.000 mm, lying `JOINT limits: all OK`). | `tools/clips/*.py`, `docs/anim_lying.md` |
-| Unity export + validator | Done. **175 PASS / 0 FAIL / 1 WARN** as `build_all.sh` runs it (with `--render-dir`, which adds 3 render checks; 172 PASS without). The WARN is the 4-influence skin: Gallop f14, max 23.7 mm. Khronos glTF-Validator: 0 errors. | `tools/export_unity.py`, `tools/validate_export.py`, `build/logs/build_all.log` |
-| Unity setup script, Animator, shell fur | Written, not run in Unity (OI-01). | `Unity/Calf/Editor/CalfSetup.cs`, `Unity/Calf/Fur/` |
+| Skin weights | Done. Stage B smooths the withers/neck (813faea), re-splits the tail chain (`Tail5` now weighted), repaints the brisket midline and limits **every LOD to 4 influences**, so Blender previews equal Unity. The exporter only normalises; the validator's every-frame skin check gives 0.005 mm (FBX) / 0.049 mm (GLB). | `tools/calf_stage_b.py`, `tools/weight_utils.py` |
+| Textures | Done at 4096: BaseColor, Normal, Roughness, AO, MaskMap (HDRP), MetallicSmoothness (URP); eye 1024; fur mask + noise. Final review: jaw/ear regions, iris and lid rim, shoulder band, blaze, tail switch, hooves, neck/throat folds in the normal map, nostrils and mouth line, orange tone. `T_Calf_Height` is authoring-only and not exported. The GLB embeds 2048 copies. | `tools/calf_textures.py`, `tools/calf_fur_textures.py` |
+| Animation set | Done: **25 clips**. Idle and Eating (imported; leg IK re-solved; Idle's left-hind slide and Eating's muzzle height repaired), Stand, Walk_Slow/Walk/Trot/Gallop (in place + `_RM`), TurnLeft90/Right90 (56 f, eased), Idle_LookAround, Graze_Start/Loop/End, Call, HeadShake, LieDown, Lying_Idle, GetUp, Death, Death_Lying, Leap. | `tools/calf_animations.py`, `tools/anim_lib.py`, `tools/anim_gait.py`, `tools/clips/` |
+| Key-pose clip families | Done and reviewed: `actions` (Death, Leap, HeadShake, Death_Lying), `idle_graze`, `imported_fix` (repairs Idle/Eating, no new clips), `locomotion` (Stand, Walk_Slow(_RM), turns, Unity blend-tree QA), `lying`. The build's QA gate reads `QA GATE: pass (25 clips)`. The family QAs reproduce on the rebuilt stage B (lying `JOINT limits: all OK`; seams and boundaries 0.0000 mm, root-relative ends ≤ 0.0004 mm). | `tools/clips/*.py`, `docs/anim_lying.md` |
+| Unity export + validator | Done. **267 PASS / 0 FAIL / 0 WARN** (`build/logs/validate.log`; `build_all.sh` passes `--render-dir`, which adds the 4 render checks). Every frame of every clip is checked: bones (with an off-axis point), skins with the engines' maths, root motion, twist. Khronos glTF-Validator: 0 errors. FBX 14.0 MB; GLB 14.3 MB (2048 textures, single-sided). | `tools/export_unity.py`, `tools/validate_export.py` |
+| Unity setup script, Animator, shell fur | Fixed after the review (U1-U10) and integrated: Death_Lying, time-scaled Trot/Gallop children (3.2-3.6 m/s crossfade), 0.35 s Lying_Idle → GetUp, 0.25 s Death blend. The current `CalfSetup.cs` compiles with Roslyn (C# 9) against Unity stubs; the review version also ran against fakes (90 + 12 checks); the shader compiles with DXC (1032 variants). Not run in Unity (OI-01). | `Unity/Calf/Editor/CalfSetup.cs`, `Unity/Calf/Fur/` |
 | Unity verification | **Not done.** Needs a machine with Unity (OI-01). | `Unity/Calf/README.md` "Not verified" |
-| One-command build | Done: `bash tools/build_all.sh`. Read the "Do not" list in CLAUDE.md first (OI-27..29, OI-33). | `tools/build_all.sh` |
-| Final multi-lens review | **In progress** (lenses: likeness, animation, export rig, unity, docs). Its fixes land after checkpoint 01 and need a rebuild, the gate (CLAUDE.md) and a new checkpoint. | "Log" below |
+| One-command build | Done: `bash tools/build_all.sh` (422 s: textures 276 s, validator 89 s). The animations step fails on a QA-gate violation; `--skip-textures` re-links the old materials and refuses if the stage-B UVs changed; each run keeps a timestamped copy of the validator log. Read the "Do not" list in CLAUDE.md first (OI-29, OI-33). | `tools/build_all.sh`, `tools/relink_materials.py` |
+| Final multi-lens review | **Done**: 5 lenses (likeness, animation, export rig, unity code, docs), each "ship with fixes"; 58 findings fixed or deferred; integrated, retuned for the smaller head and rebuilt (log entry of the same name below). What stays open is OI-35..OI-43. | "Log" below |
 
 ## Open issues
 One list for the whole project. The dated log entries and `Unity/Calf/README.md` "Known issues" point here; close items here.
@@ -26,40 +27,50 @@ Severity: major = visible in normal gameplay or blocks a use case; minor = close
 
 | ID | Area | Issue | Sev. | Source | Status |
 |---|---|---|---|---|---|
-| OI-01 | Unity | Nothing has been imported or run in Unity: FBX import, Avatar and Root node, root motion (`_RM`, turns, Leap, Death), loop-match lights, clip compression, URP/HDRP material look, LODGroup, `CalfSetup.cs`, `CalfFur.cs` and the shell-fur shader. | major | README "Not verified"; PLAN "Known limits" | open: needs a machine with Unity |
-| OI-02 | Skin | Stage B limits only the cage (LOD2) to 4 influences; subdivision gives LOD0/LOD1 up to 7. The export refit leaves a 23.7 mm max deviation from the Blender skin (Gallop f14, brisket midline), so Blender previews differ from Unity. | minor | export entry; README "Known issues"; `export.log` | open: limit and refit after subdivision, and clean up the brisket weights, in stage B |
+| OI-01 | Unity | Nothing has been imported or run in Unity: FBX import, Avatar and Root node, root motion (`_RM`, turns, Leap, Death, Death_Lying), the time-scaled blend-tree children, loop-match lights, clip compression, URP/HDRP material look, LODGroup, `CalfSetup.cs`, `CalfFur.cs` and the shell-fur shader. | major | README "Not verified"; PLAN "Known limits" | open: needs a machine with Unity (the C# compiles against stubs, the shader with DXC) |
+| OI-02 | Skin | Stage B limits only the cage (LOD2) to 4 influences; subdivision gives LOD0/LOD1 up to 7. The export refit leaves a 23.7 mm max deviation from the Blender skin (Gallop f14, brisket midline), so Blender previews differ from Unity. | - | export entry; README "Known issues"; `export.log` | **closed** (final review EXP-2): stage B repaints the brisket midline and limits every LOD to 4 influences; the exporter only normalises; validator skin 0.005 mm (FBX) / 0.049 mm (GLB) on every frame, 0 WARN. |
 | OI-03 | Skin | The withers/neck crease when the neck pitches down (grazing). | - | session-1 animation entry; idle_graze "Open" | **closed**: 813faea Laplacian smoothing of Torso2/3, Neck1-3, FrontShoulder (`calf_stage_b.py`). GRAZE nose pad re-measured at checkpoint 01: 3.27-6.23 cm, unchanged. |
-| OI-04 | Hooves | README: the hind hoof soles sit 12 mm below y = 0. | - | README "Known issues" | **closed**: stage B lifts the soles (LOD0 min z 0.0002 m; validator ground 0.0002). The README note is stale. |
+| OI-04 | Hooves | README: the hind hoof soles sit 12 mm below y = 0. | - | README "Known issues" | **closed**: stage B lifts the soles (LOD0 min z 0.0002 m: hind soles +0.2 mm, front +1.1 mm; validator ground 0.0002). The README note was removed in the final-review docs refresh. |
 | OI-05 | Death | No root motion. | - | actions "Open" | **closed**: the Root drifts 0.787 m to the calf's right (actions rework). |
 | OI-06 | Leap | The lead fore is reach-clamped 2.3 cm and slaps down at 50 mm/f. | - | actions "Open" | **closed**: 15 mm/f on the last airborne frame, no clamp. |
 | OI-07 | Death | Lower-leg crossing and tail contact were checked visually only. | - | actions "Open" | **closed**: OVERLAP QA (LOD2 limb pairs 0, bone capsules clear). |
 | OI-08 | Leap | No in-place Leap (root motion only). | minor | actions "Open" | open |
 | OI-09 | Death | No `Dead_Idle` loop. It must reuse `death_fn`'s hook/post functions with `dead_pose()`. | minor | actions "Open" | open |
-| OI-10 | Lying | The lying calf is 0.40 m behind its standing Root (LieDown/GetUp have no root motion), so the collider is offset while lying. | minor | lying "Open"; `anim_lying.md` | open: collider offset, or root motion on LieDown/GetUp |
-| OI-11 | Death | The topple takes 22 frames; the GiM calf falls in about 13-15 frames with looser, splayed legs. | minor | actions "Open" | open |
-| OI-12 | Graze | idle_graze minor 1: the muzzle never touches the ground (nose pad 3.3-6.2 cm in Graze_Loop). | minor | idle_graze review | open |
+| OI-10 | Lying | The lying calf is 0.40 m behind its standing Root (LieDown/GetUp have no root motion), so the collider is offset while lying. (Death_Lying does move the Root: 0.17 m to the right and 0.38 m back, so it ends under the carcass.) | minor | lying "Open"; `anim_lying.md` | open: collider offset, or root motion on LieDown/GetUp |
+| OI-11 | Death | The topple takes 22 frames; the GiM calf falls in about 13-15 frames with looser, splayed legs. | minor | actions "Open"; final review A11 | open (deferred: a rework of Death, not a parameter change) |
+| OI-12 | Graze | idle_graze minor 1: the muzzle never touches the ground. Now (after A12a and the smaller-head retune) the Graze_Loop nose pad is 2.62-4.29 cm on LOD2 (LOD0 2.94-4.55; checkpoint 01: 3.27-6.23), and each bite dips only ~0.4 cm. | minor | idle_graze review | open (improved) |
 | OI-13 | Graze | idle_graze minor 2: the right fore is "over at the knee" in GRAZE (carpus 26.8°). | minor | idle_graze review | open |
-| OI-14 | Graze | idle_graze minor 3: abrupt step lift-off (the stepping fetlock jumps 8.6 mm on Graze_Start f12 / Graze_End f13). | minor | idle_graze review | open |
-| OI-15 | Graze | idle_graze minor 4: the tear jerk snaps in one frame (Graze_Loop f11/f53/f87). | minor | idle_graze review | open |
+| OI-14 | Graze | idle_graze minor 3: abrupt step lift-off (the stepping fetlock jumps 8.6 mm on Graze_Start f12 / Graze_End f13; the QA's SMOOTH line still shows IKFrontLeg.L 8.60 / 9.36 mm/f² there). | minor | idle_graze review | open |
+| OI-15 | Graze | idle_graze minor 4: the tear jerk snaps in one frame (Graze_Loop f11/f53/f87). | - | idle_graze review | **closed** (final review A12b): `flick()` eases in; head pitch rate 0.9 → 3.1 → 5.1 → 2.9°/f (was -0.9 → -5.9 → -3.4). |
 | OI-16 | Graze | idle_graze minor 5: the swing hoof grazes the ground on LOD2 only. | minor | idle_graze review | open |
-| OI-17 | Idle/Graze | idle_graze minor 6: the fly-swat tail swish is weak (tip ±8-12 cm). | minor | idle_graze review | open |
+| OI-17 | Idle/Graze | idle_graze minor 6: the fly-swat tail swish is weak (tip ±8-12 cm). | - | idle_graze review | **closed** (final review A10): anim_lib swings the hanging tail bones about the right axis; tip range Idle_LookAround -27/+37 cm, Graze_Loop ±32 cm; the gaits swing too. |
 | OI-18 | Mesh | idle_graze minor 7: no mouth interior; the Call jaw stretches the lips into a sheet. | minor | idle_graze review | open |
-| OI-19 | Graze | idle_graze minor 8: Graze_End steps the left fore 6 cm backward. | minor | idle_graze review | open |
+| OI-19 | Graze | idle_graze minor 8: Graze_End steps the left fore 6 cm backward. | minor | idle_graze review; final review A12c | open (deferred: a forward shuffle needs root motion on Graze_End) |
 | OI-20 | Rig | The jaw is a single hinge (no lateral chewing); there are no eyelids (no blinks). | minor | idle_graze "Open" | open |
 | OI-21 | Lying | GetUp's left-fore plant is the tightest joint (fetlock -61°, limit -65); the hind swings lift only 1-2 cm; folded fore cannons hide in the transition frames; the tail does not wrap the body. | note | `anim_lying.md` | accepted |
 | OI-22 | Leap/Death | Leap: the hind hocks absorb to 85-89° for 2-3 frames. Death: the trunk impact is a one-frame stop. | note | actions "Open" | accepted (intended) |
-| OI-23 | Fur | PLAN's alpha fur cards (forehead tuft, ear fringe, tail switch) do not exist (`grep -ri "fur card" tools/` finds nothing). Only the optional URP shell fur exists. | minor | PLAN | not started |
-| OI-24 | Textures | PLAN's anatomical landmark detail in the normal map (shoulder, hip points, knees, hocks, neck folds) is not done: the normal map carries only fur-strand height. | minor | PLAN "Known limits" | not started |
+| OI-23 | Fur | PLAN's alpha fur cards (forehead tuft, ear fringe, tail switch) do not exist (`grep -ri "fur card" tools/` finds nothing). Only the optional URP shell fur exists; since the final review the forehead tuft and the tail switch are modelled in the stage-B mesh. | minor | PLAN | not started |
+| OI-24 | Textures | PLAN's anatomical landmark detail in the normal map (shoulder, hip points, knees, hocks, neck folds) is not done. The final review (L10) added neck/throat skin folds and a mouth-line crease to the fur-strand height; shoulder/hip points, knees and hocks are missing (a 3-6 cm bump gives under 2° of normal tilt, so they need geometry). | minor | PLAN "Known limits" | open (partly done) |
 | OI-25 | Rig | PLAN phase 3's persistent Blender IK authoring rig was not built. IK exists only inside `anim_lib` and `rebake_leg_ik.py`, and every clip is baked to FK. | note | PLAN | accepted deviation |
-| OI-26 | Unity | PLAN's "speed/turn blend tree": `CalfSetup.cs` builds a Speed-only blend tree, with turns as trigger states. | note | PLAN | accepted deviation |
-| OI-27 | Pipeline | `calf_animations.py` always writes `build/stage_b_rebaked.blend`, whatever `--out` says. A scratch run still writes into `build/`, and parallel runs race on that file (this happened during the final review). | major | final review DOC-04a | open (code); rule in CLAUDE.md "Do not" |
-| OI-28 | Pipeline | `build_all.sh --skip-textures` re-runs stages A/B but reuses the old `build/stage_c.blend` (a full copy of the previous stage B), so stage-B edits never reach stage D or the FBX. | major | DOC-04b | open (code); rule in CLAUDE.md "Do not" |
-| OI-29 | Pipeline | Nothing checks texture resolution: `--tex-res 2048` copies 2K maps into the committed `Unity/Calf/Textures`, and the validator still reports 0 FAIL. | major | DOC-04c | open (code); rule in CLAUDE.md "Do not" |
-| OI-30 | QA | The clip QA gives no pass/fail verdict or exit code. The build log's `planted slide 0.00 mm` is measured only for Walk_RM/Trot_RM/Gallop_RM; the other 18 clips get no `planted_fn`. | major | DOC-05 | open (code); the gate is defined in CLAUDE.md |
-| OI-31 | QA | The clip modules default their output to one session's scratchpad path. `lying.py` defaults to `--render all` (~10 min). | minor | DOC-09 | open (code); pass `--out-dir` / `--scratch` and `--render none` |
+| OI-26 | Unity | PLAN's "speed/turn blend tree": `CalfSetup.cs` builds a Speed-only blend tree (Stand, Walk_Slow_RM, Walk_RM, Trot_RM, Gallop_RM plus time-scaled Trot/Gallop copies), with turns as trigger states. | note | PLAN | accepted deviation |
+| OI-27 | Pipeline | `calf_animations.py` always writes `build/stage_b_rebaked.blend`, whatever `--out` says. A scratch run still writes into `build/`, and parallel runs race on that file (this happened during the final review). | - | final review DOC-04a | **closed**: the re-bake goes next to `--out` (`<out>_rebaked.blend`; the build writes `build/stage_d_rebaked.blend`). `build/stage_b_rebaked.blend` is a stale leftover. |
+| OI-28 | Pipeline | `build_all.sh --skip-textures` re-runs stages A/B but reuses the old `build/stage_c.blend` (a full copy of the previous stage B), so stage-B edits never reach stage D or the FBX. | - | DOC-04b | **closed**: `--skip-textures` rebuilds stage C from the new stage B with the old materials (`tools/relink_materials.py`) and refuses (exit 2) if the LOD0 UVs changed. |
+| OI-29 | Pipeline | Nothing checks texture resolution: `--tex-res 2048` copies 2K maps into the committed `Unity/Calf/Textures`, and the validator still reports 0 FAIL. | major | DOC-04c | open (code); rule in CLAUDE.md "Do not". The validator's new texture-memory check covers only the GLB, whose textures are reduced to 2048 on purpose. |
+| OI-30 | QA | The clip QA gives no pass/fail verdict or exit code. The build log's `planted slide 0.00 mm` is measured only for Walk_RM/Trot_RM/Gallop_RM; the other 18 clips get no `planted_fn`. | major | DOC-05 | partly fixed: `calf_animations.py` now has a hard QA gate (`QA GATE:` line, exit 1): IK gap, planted slide on the four `_RM` gaits (flat-hoof stance), loop seams, knees/hocks bending backward. Still open: the other 21 clips print `planted slide 0.00 mm` unmeasured (the family QAs and `imported_fix` measure their own). |
+| OI-31 | QA | The clip modules default their output to one session's scratchpad path. `lying.py` defaults to `--render all` (~10 min). | minor | DOC-09 | open (code); pass `--out-dir` / `--scratch` and `--render none`. Also: `imported_fix.py` defaults `--in` to the stale `build/stage_b_rebaked.blend` (pass `build/stage_d_rebaked.blend`), and `locomotion.py --out` needs an existing directory. |
 | OI-32 | Tools | `render_views.py` silently renders the rest pose when `--action` is not found, and Blender's FBX importer names the actions `CalfRig\|<clip>`. | minor | DOC-10 | open (code); documented in the docstring |
-| OI-33 | Pipeline | `build_all.sh` / `export_unity.py` overwrite the git-tracked `Unity/Calf` and `build/logs`. A manual validator run after build_all left `validate.log` at 172 PASS while `build_all.log` says 175. | minor | DOC-13 | open (code); rule in CLAUDE.md "Do not" |
-| OI-34 | Review | Findings of the final multi-lens review (likeness, animation, export rig, unity, docs). | - | final review | in progress: add a row per finding that stays open after the fix round |
+| OI-33 | Pipeline | `build_all.sh` / `export_unity.py` overwrite the git-tracked `Unity/Calf` and `build/logs`. A manual validator run after build_all left `validate.log` at 172 PASS while `build_all.log` says 175. | minor | DOC-13 | partly fixed: `build_all.sh` keeps timestamped copies (`validate-<stamp>.log`, `validate_report-<stamp>.json`). It still rewrites `Unity/Calf` (by design) and writes no `build_all.log` itself (redirect its output). Rule in CLAUDE.md "Do not". |
+| OI-34 | Review | Findings of the final multi-lens review (likeness, animation, export rig, unity, docs). | - | final review | **closed**: 58 findings fixed or deferred (log entry "final multi-lens review integrated"); what stays open is OI-35..OI-43. |
+| OI-35 | Death_Lying | The 'agonal gasp' keys are absolute (f4 neck [-4,-4,-3]). Since the lying head was raised (L5: LYING neck [-9,-10,-9], head (18,4,-4)), the head drops from f0 (41 → 30 cm by f5) instead of lifting first. | minor | final review (Death retune) | open: make the gasp keys relative to `lying()` |
+| OI-36 | Gallop | In the gathered phase (f1-3) the same-side forearm and shin pass through each other: 64 LOD2 polygon pairs, 85 mm bone-capsule overlap. It predates the final review. | minor | final review, animation fix round | open: needs a redesign of the gait body motion |
+| OI-37 | Gaits | The fore legs crouch under load: loaded carpus bend up to ~60° in the walk, 85° in the trot and 90° in the gallop, because `Calf.reach_pass` lowers the whole body to its worst frame. | major | final review, animation fix round | open: per-frame vault or fetlock drop |
+| OI-38 | Gaits | Review A8 remainder: the hind hock locks straight at toe-off for 2-3 frames in the trot and 4-5 in the gallop (the walk is fixed). Two attempts made the Trot/Gallop blend or the fore fetlocks worse. | minor | final review A8 | open (deferred: gait redesign) |
+| OI-39 | Walk | Review A11: the Walk cycle is 24 f (0.8 s) against about 41 f in the GiM walk. A slower Walk would overlap Walk_Slow (36 f, 0.45 m/s), which now covers the slow cadence. | minor | final review A11 | deferred |
+| OI-40 | Death_Lying | The limp hooves slide along the ground during the roll: CONTACT totals LF 108, RF 80, LH 28, RH 37 mm (LF 24.9 mm/f at the f31 impact), where Death stays within 7-10 mm per hoof. | minor | actions QA on the final build | open |
+| OI-41 | Mesh | Review L12: the top line and underline (rump, tail head, girth) differ from GiM. The fix moves rest bones (hips, tail chain) and needs every gait and family QA re-run. | minor | final review L12 | deferred |
+| OI-42 | Tools | Review L14: `silhouette_compare.py` still scales by bounding-box height. The reviewer's withers-normalised version (GrabCut mask, Walk f10, IoU and pattern agreement) was not ported; its scripts lived in the session scratchpad. | minor | final review L14 | deferred |
+| OI-43 | Unity | Review U6b: stale one-shot triggers are not reset automatically (that needs a runtime `StateMachineBehaviour` file). The README documents the `IsTag("Ready")` / `ResetTrigger` pattern. | minor | final review U6b | deferred |
+| OI-44 | Git | This environment's git proxy refuses tag pushes (403), so checkpoints are commits whose message starts with `CHECKPOINT NN:`. | note | CLAUDE.md checkpoint rule | accepted |
 
 ## Checkpoints (safe, pushed)
 Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline --grep CHECKPOINT`). The asset content is identical to the commit hash listed.
@@ -67,6 +78,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 | # | Asset content at | State |
 |---|---|---|
 | 01 | `cdcf752` (+ docs-only commits after it) | Full pipeline from cow.glb → `Unity/Calf`: calf mesh (3 LODs), 4K textures, 21 clips, FBX + GLB. Validator 175 PASS / 0 FAIL / 1 WARN as `build_all.sh` runs it (172 PASS without `--render-dir`; the WARN is the 4-influence skin, Gallop max 23.7 mm). Final multi-lens review in progress. |
+| 02 | `0dc4c35` (deliverable) + docs/tool fixes in the CHECKPOINT 02 commit | Final review integrated: 25 clips, validator 267 PASS / 0 FAIL / 0 WARN, QA gate pass |
 
 ## Log
 
@@ -498,3 +510,84 @@ Run: `python3 tools/clips/actions.py --no-render` (~6 s: builds on `build/stage_
 stale 0.992 / "~2 mm" clamp facts in the `tools/clips/{idle_graze,actions,lying}.py` docstrings and comments, the
 `tools/clips/__init__.py` docstring, and the stale `Unity/Calf/README.md` items (the 12 mm hoof note, 172 vs 175 PASS,
 the "ear tips" height).
+
+### 2026-09-28: final multi-lens review integrated and rebuilt (checkpoint 02)
+**Review round.** One reviewer and one fixer per lens, on checkpoint 01. Each fixer changed only its own files and handed
+the rest to the orchestrator. The reviewers' harnesses and renders were in the session scratchpad (`review/<lens>`,
+`review/<lens>_fix`) and are not committed. Every lens gave the verdict **ship with fixes**:
+
+| Lens | Findings | Fixed by the lens | Deferred (what happened to it) |
+|---|---|---|---|
+| likeness | 14 (8 major, 6 minor) | L1-L4, L6-L11, L13 | L5 lying head (landed, see below); L12 top line (OI-41); L14 silhouette tool (OI-42) |
+| animation | 13 (6 major, 7 minor) | A1-A6, A9, A10, A13; parts of A8, A11, A12 | A7 (landed in `CalfSetup.cs`); A8 remainder (OI-38); A11 walk re-time (OI-39) and Death timing (OI-11); A12c (OI-19) |
+| export rig | 7 (1 major, 6 minor) | EXP-1 (validator gate), EXP-2, EXP-4, EXP-5 | EXP-3 (fixed by the new turns, A6); EXP-6 and the EXP-2 source fix (landed in stage B); EXP-7 (README, done in this refresh) |
+| unity code | 10 (2 major, 8 minor) | U1-U10 | U6b trigger auto-reset (OI-43); U4 clip easing (done by A6) |
+| docs | 14 (8 major, 6 minor) | DOC-01, DOC-02, DOC-04..14 (entry above) | DOC-03 (README, done in this refresh) |
+
+**What changed** (finding IDs in brackets):
+- Stage B: `head_scale` 1.22 → 0.97 and `neck_deepen` 1.28 → 1.10 (poll to nose 0.35 × withers, as GiM) [L4];
+  `ear_scale` 1.2 → 1.4 with flattened, cupped leaves (~8 mm thick, no self-intersection) [L8]; `eye_open` 1.55 → 0.85,
+  `eye_protrude` 0.32 → 0.25 (opening 78 → 35 mm) [L2]; tail switch (`tail_switch` 1.8) [L6]; forehead tuft [L7]; tail
+  chain weights re-split so `Tail5` is weighted [EXP-6]; brisket midline repainted and **every LOD limited to 4
+  influences** (Blender == Unity; the old skin WARN is gone) [EXP-2]; optional `--in/--out`.
+- Textures: Jaw/Ear bake regions (orange jaw and throat, pale inner ears) [L1]; darker iris and a pale lid rim [L2];
+  shoulder band and brisket [L3]; tail switch [L6]; blaze [L7]; hoof horn, coronet and cleft [L9]; normal-map bump ×3
+  plus neck/throat folds and a mouth crease [L10]; nostrils and mouth line [L11]; orange tones [L13]. The lens measured
+  pattern agreement 0.789 → 0.855, white 35.4 → 28.0% (GiM 28.5%), rest silhouette IoU 0.678 → 0.697. Bake caches with
+  the old region layout are rejected.
+- anim_lib / anim_gait: IK pole guard (the Gallop right-fore carpus flip; FrontUpperLeg.R twist 173° → 1.5° per frame)
+  [A2, EXP-1]; a root-yaw bug in the leg-top aiming [A6]; the tail swing axis (tails now swing) [A10]; the heel roll-off
+  pivots on the toe tip, plus `flat_planted_fn_for` for the slide QA [A9]; Gallop re-phased by 5/7 so it blends with the
+  trot (simulated 50/50 blend skate 42 → 9.8 cm) [A1] and head held higher [A11]; new `WALK_SLOW` gait [A4].
+- Clip families: new `imported_fix` (Idle left-hind slide 93 → 0 mm [A3]); new `locomotion` (Stand, Walk_Slow(_RM)
+  [A4]; TurnLeft90/Right90 re-authored as 56 f eased turns that start and end on `Pose()` [A6]; blend-tree QA [A1]);
+  `Death_Lying` in `actions` [A5]; GetUp hind steps land cleanly [A13]; graze `flick()` eased [A12b].
+- Export and validator: the validator checks every frame (bones with an off-axis point, per-frame twist, one-shot ends
+  vs Idle, skins with the engines' maths, root motion, GLB single-sided and texture memory, render bounding boxes)
+  [EXP-1, EXP-2, EXP-4, EXP-5]; the exporter refit covers every frame (now a no-op: the source is within 4 influences);
+  the GLB embeds 2048 textures and is single-sided (35.9 → 14.3 MB) [EXP-4].
+- Unity: Root Motion Node cleared and the Rig Root node set [U1]; shell-fur passes, shadows and keywords [U2, U3]; turn
+  transitions [U4]; Idle as its own state and the Speed tree with Stand / Walk_Slow_RM [U5]; explicit Die transitions,
+  controller rebuilt in place, state tags [U6]; LODGroup thresholds [U7]; README [U8]; non-URP projects [U9]; shared
+  shell materials [U10].
+
+**Integration by the orchestrator** (changes in files no lens owned, plus the hand-offs):
+- `calf_stage_b.py`: the EXP-6 tail re-split, the brisket repaint and the 4-influence limit on every LOD.
+- `calf_animations.py`: the old turn loop removed (the `locomotion` family builds the turns); a hard QA gate (IK gap,
+  planted slide on the `_RM` gaits with the flat-hoof stance, loop seams, knees/hocks bending backward) that exits 1; the
+  re-bake written next to `--out` (OI-27).
+- `build_all.sh`: `--skip-textures` re-links the old materials onto the new stage B (`tools/relink_materials.py`) and
+  refuses if the UVs changed (OI-28); timestamped validator logs (OI-33).
+- `CalfSetup.cs`: Death_Lying from LieDown / Lying_Idle (0.3 s), a 0.25 s Death blend, Lying_Idle → GetUp 0.35 s [A7],
+  and time-scaled Trot_RM ×1.37 / Gallop_RM ×0.82 children so the Trot/Gallop crossfade stays inside 3.2-3.6 m/s [A1].
+  Re-compiled with Roslyn (C# 9) against the Unity stubs; not re-run against the fakes.
+- L5 and a retune for the smaller head (the animation lens had tuned GRAZE, Eating and the dead head on the old, bigger
+  head):
+  - GRAZE neck 26.5/29.5/26.5, head -43, Torso3 8: Graze_Loop nose pad 2.62-4.29 cm on LOD2 (the lens-round GRAZE on
+    the new head: 6.91-8.98 cm). The Head bone briefly tips to ~96° below horizontal at Graze_Start f33 (the face just
+    past vertical; not checked in a render).
+  - Eating: `imported_fix.fix_eating` adds 15.9° of neck pitch (Head -15.9°) weighted by how far the head is down: nose
+    pad min 11.35 → 3.50 cm (LOD2) and 11.67 → 3.83 cm (LOD0), loop seam unchanged. The descent is ~30% faster.
+  - Lying [L5]: LYING neck [-9,-10,-9], head (18,4,-4): Head midpoint 0.376 → 0.557 m. The kneeling sniff is back to
+    3.9 cm (`kn_low`, new `kn_key`); `ly_turn` and GetUp `prep` retuned (details in `docs/anim_lying.md`).
+  - Death / Death_Lying: the dead head rests on the ground (Death: -0.11 cm at the f36 hit, 0.0 cm held; Death_Lying:
+    0.0 cm from f48). The Death_Lying trunk-contact solve ignores head vertices, and its upper hind leg now lies in
+    front of the lower one (capsule clearance 34.1 mm).
+- The docs-lens docstring hand-offs in `tools/clips/*.py` (0.9985 clamp). `tools/clips/__init__.py` was not changed.
+
+**Rebuild** (`bash tools/build_all.sh`, 2026-09-28 18:16-18:23, 422 s; stdout in `build/logs/build_all_run2.out`):
+- Steps: stage_a 1 s, stage_b 3 s, textures 276 s, fur_tex 2 s, animations 24 s, export 27 s, validate 89 s.
+- `QA GATE: pass (25 clips)`; export rig: max world-space hoof change 0.000 mm.
+- Validator **267 PASS / 0 FAIL / 0 WARN** (source 3, anim 36, FBX raw 110, skin 4, FBX re-import 40, GLB raw 38, GLB
+  re-import 31, Khronos 1, render 4). Checkpoint 01's 175 / 0 / 1 came from the older, smaller validator; the counts are
+  not comparable.
+- Files: FBX 14.0 MB, GLB 14.3 MB, `Unity/Calf` 66 MB; the shipped textures are 4096 (checked with PIL).
+- Docs refresh (this entry, `Unity/Calf/README.md`, CLAUDE.md, PLAN, REFERENCES, `anim_lying.md`): the family fast QAs
+  were re-run on the rebuilt `build/stage_b.blend` (18:16) into the session scratchpad (idle_graze, actions, lying,
+  locomotion; `imported_fix` on `build/stage_d_rebaked.blend`), 5-8 s each. They reproduce the numbers above and in the CLAUDE.md
+  gate table. The actions QA shows the Death_Lying hooves sliding 28-108 mm during the roll (OI-40).
+
+**Open after this round:** OI-35 (Death_Lying gasp), OI-36 (Gallop leg interpenetration), OI-37 (fore legs crouch under
+load), OI-38, OI-39 and OI-41..43 (deferred review items), OI-40 (Death_Lying hoof slide), and the older open rows
+(OI-01, the Unity import, first).
+**Next:** commit as CHECKPOINT 02, then one Unity import pass on a machine with Unity (OI-01).

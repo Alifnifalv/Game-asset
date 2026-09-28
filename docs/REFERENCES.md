@@ -19,7 +19,7 @@ Checked on a contact sheet of the video. The camera is fixed and the calf moves 
 | Time (s) | Content | Our clip |
 |---|---|---|
 | 0-~5 | Title cards ("COW", "animation preview") | - |
-| ~5.5-8 | Walk | `Walk`, `Walk_RM` |
+| ~5.5-8 | Walk (about 41 frames per cycle) | `Walk`, `Walk_RM`; `Walk_Slow(_RM)` (36 f) is closer to this cadence than `Walk` (24 f) |
 | ~8.5-10 | Trot into gallop (the reviews used 8.6-13.4 s as the gallop reference) | `Trot`, `Gallop` |
 | ~10.5-11.8 | Bounding, airborne gallop / leap strides (fore legs reaching, hind legs kicked back) | `Gallop`, `Leap` |
 | ~12-13 | Stops, head lowering into grazing | `Graze_Start` |
