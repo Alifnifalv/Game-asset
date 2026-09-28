@@ -1,0 +1,4 @@
+# regenerable intermediates (rebuild with tools/*.py)
+build/
+*.blend1
+__pycache__/
