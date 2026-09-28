@@ -16,10 +16,11 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 | Key-pose clip families | Workflow author → adversarial review → fix. idle_graze (review: pass), lying (fixed after review), actions (Death/Leap fixed after review, HeadShake passed) | `tools/clips/*.py` |
 | Fur (optional, URP) | Shader + component + fur mask/noise textures written; needs a Unity compile check | `Unity/Calf/Fur/`, `tools/calf_fur_textures.py` |
 
-## Checkpoints (safe, pushed, tagged)
-| Tag | Commit | State |
+## Checkpoints (safe, pushed)
+Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline --grep CHECKPOINT`). The asset content is identical to the commit hash listed.
+| # | Asset content at | State |
 |---|---|---|
-| `checkpoint-01-calf-validated` | this tag | Full pipeline from cow.glb → `Unity/Calf`: calf mesh (3 LODs), 4K textures, 21 clips, FBX + GLB. Validator 172 PASS / 0 FAIL / 1 WARN (4-influence skin, Gallop max 23.7 mm). Final multi-lens review in progress. |
+| 01 | `cdcf752` (+ docs-only commits after it) | Full pipeline from cow.glb → `Unity/Calf`: calf mesh (3 LODs), 4K textures, 21 clips, FBX + GLB. Validator 172 PASS / 0 FAIL / 1 WARN (4-influence skin, Gallop max 23.7 mm). Final multi-lens review in progress. |
 
 ## Log
 
