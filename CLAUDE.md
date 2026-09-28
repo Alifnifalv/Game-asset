@@ -29,17 +29,26 @@ pip install "numpy<2" pillow "opencv-python-headless<4.11" imageio imageio-ffmpe
 - Blocked hosts: download.blender.org, youtube.com, gim.studio, assetstore.unity.com. PyPI and npm are reachable.
 - Unity is **not** available here. C#/shaders can't be compiled, so flag them as needing a Unity check.
 
-## Pipeline (run in order)
+## Pipeline
+**One command:** `bash tools/build_all.sh` (≈10 min; `--tex-res 2048` or `--skip-textures` for faster iterations). Logs go to `build/logs/`.
+The steps, in order:
 ```bash
 python3 tools/calf_stage_a.py      # cow.glb -> build/stage_a.blend: strip hierarchy, remove horns/udder, join+weld, quads, clean bone names
-python3 tools/calf_stage_b.py      # -> build/stage_b.blend: calf reshape (warp mesh + rest bones together), jaw/ear bones, eyes,
-                                   #    UVs, meters, 30 fps retime, LOD0/1/2 via subdivision
+python3 tools/calf_stage_b.py      # -> build/stage_b.blend: calf reshape (warp mesh + rest bones together), hoof soles on z=0, jaw/ear
+                                   #    bones, weight smoothing, eyes, UVs (packed), meters, 30 fps retime, LOD0/1/2 via subdivision
 python3 tools/calf_textures.py --in build/stage_b.blend --out build/stage_c.blend --tex-dir build/textures --res 4096
-python3 tools/calf_animations.py   # (WIP) builds the animation set with tools/anim_lib.py + tools/anim_gait.py
-python3 tools/export_unity.py ...  # -> Unity/Calf/ (FBX + GLB + textures); then tools/validate_export.py
+python3 tools/calf_fur_textures.py --in build/stage_b.blend --tex-dir build/textures
+python3 tools/calf_animations.py --in build/stage_c.blend --out build/stage_d.blend   # all clips (anim_lib + tools/clips/*)
+python3 tools/export_unity.py --in build/stage_d.blend --out-dir Unity/Calf --tex-dir build/textures
+python3 tools/validate_export.py --fbx Unity/Calf/Calf.fbx --glb Unity/Calf/Calf.glb --src build/stage_d.blend
 ```
-Check tools: `tools/render_views.py` (contact-sheet renders), `tools/silhouette_compare.py` (side silhouette vs the reference),
-`tools/check_animation.py` (leg/foot consistency, stretch, loops), `tools/rebake_leg_ik.py` (re-solve leg IK for imported clips).
+Check tools:
+- `tools/render_views.py`: contact-sheet stills.
+- `tools/render_clip.py`: filmstrip/GIF of an action with a root-tracking camera on a checker ground.
+- `tools/silhouette_compare.py`: side silhouette against the reference.
+- `tools/check_animation.py`: leg/foot consistency, stretch and loops.
+- `tools/rebake_leg_ik.py`: re-solve leg IK for imported clips.
+- Each clip module (`python3 tools/clips/<family>.py`) builds its own clips and runs its QA and renders.
 
 ## Conventions (every tool relies on these)
 - **Units and axes:** meters, Z up, and the calf **faces -Y** (Unity +Z after FBX export). Ground at z=0. Withers ≈1.0 m.

@@ -374,3 +374,15 @@ Run: `python3 tools/clips/actions.py --no-render` (~6 s: builds on `build/stage_
 - CalfSetup.cs (Death → Translate) needs the usual Unity compile check. No in-place Leap and no Dead_Idle loop.
 - Leap: the hind hocks absorb to ~85-89° for 2-3 frames after landing. The Death trunk impact is a one-frame stop
   (Body tail point 143 mm/f² at f33; intended).
+
+### 2026-09-28: clip families finished, library fixes, one-command build
+- **Clip families** (workflow: author → adversarial review → fix):
+  - idle_graze passed review. 8 minor findings are still open: muzzle about 4 cm above the grass, a one-frame tear jerk, abrupt step lift-off, a weak tail swish, no mouth interior, and a backward step in Graze_End.
+  - lying fixed 3 major + 2 minor (joint limits, fore legs stretched forward in LYING, knee lock 0.04 mm, hoof pivots). It keys the PoleTarget helpers per frame; these are dropped on export.
+  - actions fixed 4 major + 6 minor. Death is now a gravity topple over the right hooves, with root motion to the right so the capsule follows the body (`CalfSetup.cs`: Death is `RootMotion.Translate`). The Leap landing is smoothed.
+  - Details and QA tables: `docs/anim_lying.md` and the family entries above.
+- **anim_lib fixes:**
+  - The reach clamp went 0.992 → 0.9985 × chain and the vault threshold 0.99 → 0.997. The straight front legs rest at 0.996, so a `Pose()` frame now equals the rest pose; before, the hooves were 2 mm up with 3° of knee bend. The walk crouch halved: body 17–36 mm down instead of 34–58.
+  - `keyed_pose_fn` "hold" keys now have a true zero tangent.
+- **The security warning from the workflow was benign:** the harness blocked a subagent's foreground `sleep 200`. Nothing was pushed or deleted by agents.
+- **`tools/build_all.sh`** runs the whole pipeline (A → B → textures → fur textures → animations → export → validate).

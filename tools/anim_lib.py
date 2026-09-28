@@ -250,7 +250,7 @@ class Calf:
             # keeps planted feet reachable, so planted feet are not moved)
             root = pose[d["chain"][0]].translation
             v = foot_M[leg].translation - root
-            lim = 0.992 * self.chain_len[leg]
+            lim = 0.9985 * self.chain_len[leg]      # > the straight front legs' rest reach (0.996), so Pose() == rest
             if v.length > lim:
                 M = foot_M[leg].copy(); M.translation = root + v.normalized() * lim
                 foot_M[leg] = M
@@ -363,7 +363,7 @@ class Calf:
     def reach_excess(self, P):
         """per leg: how much farther the foot is than the leg chain can reach (m, >0 = unreachable)"""
         self.pose_to_basis(P)
-        return {leg: (self._last_targets[leg] - self._last_roots[leg]).length - 0.99 * self.chain_len[leg]
+        return {leg: (self._last_targets[leg] - self._last_roots[leg]).length - 0.997 * self.chain_len[leg]
                 for leg in LEGS}
         return out
 
@@ -638,8 +638,9 @@ def keyed_pose_fn(keys, loop=False, overlays=()):
         t = 0.0 if f1 == f0 else (f - f0) / (f1 - f0)
         P0 = at(i - 1)[1] if (i > 0 or loop) else P1
         P3 = at(i + 2)[1] if (i + 2 < len(ks) or loop) else P2
-        if i in holds: P0 = P2 if False else P1           # flat tangent at a held key
-        if (i + 1) in holds: P3 = P2
+        # zero tangent at a held key: Catmull-Rom tangent at P1 is (P2-P0)/2, at P2 it is (P3-P1)/2
+        if i in holds: P0 = P2
+        if (i + 1) in holds: P3 = P1
         t2, t3 = t * t, t * t * t
         w = (-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1, -1.5 * t3 + 2 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2)
         P = pose_combine(list(zip(w, (P0, P1, P2, P3))))
