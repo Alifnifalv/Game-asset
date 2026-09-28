@@ -220,3 +220,19 @@ Newest status first, then a chronological log. Each entry: what, why, how it was
 - The lead fore (LF) is reach-clamped by up to 2.3 cm for 2-3 airborne frames before touch-down, and its hoof arrives with 5 cm/frame then stops (a hoof "slap"). Reducing the leap speed (2.7 m/s) would soften this.
 - No in-place variant of Leap was made (root motion only).
 - Lower-leg crossing on the side and tail contact were checked visually only (the tail rests ≥9 cm up on the thighs, no clearance metric).
+
+### 2026-09-28: adversarial review of clip family `lying` (commit 9dd402a)
+- **Verdict: needs fixes (3 major, 2 minor).** Re-ran `python3 tools/clips/lying.py --render none` on the current `build/stage_b.blend` (13:13). The author's QA reproduces: IK gap ≤0.05 mm, planted slide ≤0.01 mm, carpus lock drift ≤7.1 mm, and every seam (LieDown end = Lying_Idle start/end = GetUp start; both standing ends vs `make_clip(Pose())`) at 0.000 mm / 0.000°. LOD2 non-hoof min z is now −1.0 cm; LOD0 is −0.3 cm. Root is never moved.
+- The reviewer measured independently: joint angles about the body's side axis, LOD0/LOD1 evaluated meshes, ray-parity "inside the skin" tests, and debug renders coloured by bone. The harness (`measure.py`, `inside2.py`, `rview.py`, …) is in the session scratchpad `review_lying/` and is not committed.
+- **Major findings** (handed to the fix step):
+  1. **Weight-bearing fore legs buckle past anatomical limits.** The hoof is held flat at its rest spot while the chest drops, so the fetlock hyperextends. (Rest fetlock is −31°; real limit about −65°.)
+     - LieDown RF, planted f0–34: fetlock −71° → **−117° (f35)**, carpus 124°. The carpus sits 6 cm off the ground and 17.5 cm ahead of the fetlock, *below* the fetlock.
+     - GetUp LF, planted f68+: fetlock **−121 to −124° (f63–70)**, still beyond −70° until f92. Carpus at z 5.8 cm, 17.6 cm ahead of the hoof.
+     - GetUp RF, planted f87: fetlock −85 to −89°.
+     - During the sniff the loaded carpi are already 38–46°.
+     - Suggested fixes: let the hoof roll onto the toe (flex) as the knee goes down; for GetUp, plant the fore hoof ahead of the knee with a short corrective step later, or raise the chest before planting.
+  2. **Hind stifle hyperflexion during the rump drop and the gather.** The femur-to-tibia joint angle closes to **14–17°**: RH stifle bend 163° at LieDown f86 and 166° at GetUp f18 (rest bend 60°, LYING 131/139°). The hock stays 27–30 cm high while the hip drops from 0.70 to 0.34 m, so the gaskin disappears into the thigh: 41% (LieDown f84) and 49% (GetUp f18) of the right thigh/gaskin LOD1 verts are inside the trunk. Suggested fix: bring the hind hooves forward, or let the hocks go back and down, while the rump sinks.
+  3. **In LYING the fore cannons and hooves are inside the forearm and brisket.** On LOD1, 63–64% of each FrontLowerLeg's verts are inside the forearm and 55–57% of each hoof (FF) is inside the brisket/neck skin. Both fore legs read as stumps ending at the knee from the front, side and below (renders `rv_ly_fore.png`, `rv_ly_below.png`). The reference shows the fore cannons and hooves visible in front of the chest. Suggested fix: move the folded cannon beside or under the forearm with less than full carpus flexion, or stretch one fore leg as in the reference.
+- **Minor:**
+  - LieDown f35: the knee lock switching on reverses the chest from −6.1 to +2.0 mm/f (a 3.6 mm rebound).
+  - The hind hooves are dragged 13–16 cm along the ground, dipping up to 7.6 mm below it (LOD0): LieDown f84–96 and GetUp f8–22.
