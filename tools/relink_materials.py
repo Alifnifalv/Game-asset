@@ -31,16 +31,16 @@ if u_old.shape != u_new.shape or np.abs(u_old - u_new).max() > 1e-5:
 # stage B is open: pull the materials (with their image datablocks) from the old stage C by name
 with bpy.data.libraries.load(old_c, link=False) as (src, dst):
     dst.materials = [m for m in src.materials if m in ("M_Calf_Body", "M_Calf_Eye")]
-new = {m.name: m for m in dst.materials}
+new = {m.name.split(".")[0]: m for m in dst.materials}      # appended copies arrive as "M_Calf_Body.001"
 for ob in [o for o in bpy.data.objects if o.type == "MESH"]:
     for slot in ob.material_slots:
         base = slot.material.name.split(".")[0] if slot.material else None
         if base in new:
             slot.material = new[base]
 for m in list(bpy.data.materials):
-    if m.users == 0: bpy.data.materials.remove(m)
-for m in new.values():
-    m.name = m.name.split(".")[0]
+    if m.users == 0 and m not in new.values(): bpy.data.materials.remove(m)
+for base, m in new.items():
+    m.name = base
 # keep image paths relative to the output location
 out = os.path.abspath(a.out)
 for img in bpy.data.images:
