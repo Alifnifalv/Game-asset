@@ -35,7 +35,7 @@ def idle(f, N=120):
 def idle_pant(f, N=60):
     t = f / N
     P = C.stand()
-    C.look(P, pitch=-6)
+    C.look(P, pitch=12)                 # head lowered, muzzle down (GiM video 21.5)
     C.pant(P, t, rate=8)
     C.wag(P, t, amp=10, rate=2)
     C.ears(P, (6, 0, 0))
@@ -81,8 +81,9 @@ def bark_clip(f, N=40):
     lean = D.Pose()
     lean.body_off = Vector((0, -0.025, -0.015)); lean.body_rot = (2, 0, 0)
     lean.legs["FL"] = C.leg("FL"); lean.legs["FR"] = C.leg("FR")
-    C.look(lean, pitch=-14)
-    lean.tail = D.tail_shape(lift=45, curl=10)
+    lean.neck = {"Neck1": (-6, 0, 0), "Neck2": (-4, 0, 0)}     # the head-carriage compensation (_common)
+    C.look(lean, pitch=-2)
+    lean.tail = D.tail_shape(lift=35, curl=80)
     lean.ears = {"L": (12, 0, 0), "R": (12, 0, 0)}
     P = C.timeline([(0, base), (8, lean), (32, lean), (40, base)], f)
     # bark pulses at f 10 and 21: jaw snaps open over 3 frames, closes over 5; head/chest jolt
@@ -92,7 +93,7 @@ def bark_clip(f, N=40):
             o = math.sin(math.pi * min(d / 3, 1) / 2) if d < 3 else 1 - D.smooth((d - 3) / 6)
             P.jaw += 34 * o
             P.nose += 3 * o
-            C.look(P, pitch=-6 * o)
+            C.look(P, pitch=2 * o)
             P.body_off = P.body_off + Vector((0, -0.006 * o, 0.004 * o))
             sp = dict(P.spine); a, b, c = sp["Spine3"]; sp["Spine3"] = (a + 2 * o, b, c); P.spine = sp
     return P

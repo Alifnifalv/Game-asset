@@ -131,7 +131,8 @@ class Pose:
         self.nose = 0.0                 # + = muzzle tip up (a sniff / snarl lift)
         self.jaw = 0.0
         self.tongue = (0.0, 0.0, 0.0)   # (out m, curl deg + tip down, side deg + left)
-        self.ears = {"L": (0, 0, 0), "R": (0, 0, 0)}     # Ear1 (pitch + tip down/back, yaw, roll)
+        self.ears = {"L": (0, 0, 0), "R": (0, 0, 0)}     # Ear1 (pitch < 0 = forward/up, > 0 = back: applied as
+                                                         # yaw + roll, see solve; yaw, roll)
         self.ear_tip = {"L": 0.0, "R": 0.0}              # Ear2 pitch
         self.eyes = (0.0, 0.0)          # (pitch, yaw) both eyes
         self.tail = [(0.0, 0.0)] * 6    # per bone (pitch + up/back, side + left)
@@ -283,13 +284,17 @@ class DogRig:
             local[n] = rot(*P.neck[n])
         local["Head"] = rot(*P.head)
         local["Nose"] = rot(P.nose)
-        local["Jaw"] = rot(-P.jaw)
+        local["Jaw"] = rot(P.jaw)                                     # + = the chin drops (mouth opens)
         out, curl, side = P.tongue
         local["Tongue1"] = rot(curl * 0.2, side * 0.4)
         local["Tongue2"] = rot(curl * 0.35, side * 0.3)
         local["Tongue3"] = rot(curl * 0.45, side * 0.3)
         for s in "LR":
-            local[f"Ear1.{s}"] = rot(*P.ears[s])
+            # ears: a negative pitch lifts the flap forward/up; a positive pitch ("ears back") would bury the folded
+            # flap in the skull, so it is applied as a swing back and out (yaw + roll, mirrored per side)
+            p, yw, rl = P.ears[s]; sg = 1 if s == "L" else -1
+            b = 0.85 * max(p, 0.0)
+            local[f"Ear1.{s}"] = rot(min(p, 0.0), yw + sg * b, rl + sg * b)
             local[f"Ear2.{s}"] = rot(P.ear_tip[s])
             local[f"Eye.{s}"] = rot(P.eyes[0], P.eyes[1])
         for i, n in enumerate(TAIL):

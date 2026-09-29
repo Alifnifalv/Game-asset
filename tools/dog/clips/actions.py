@@ -167,21 +167,21 @@ def _attack_lunge():
     P.body_rot = (-4, 0, 0)
     C.look(P, pitch=-8)
     P.legs["FL"] = C.leg("FL", dy=-0.16); P.legs["FR"] = C.leg("FR", dy=-0.16)
-    P.tail = D.tail_shape(lift=50, curl=10)
+    P.tail = D.tail_shape(lift=40, curl=80)
     return P
 
 
 # ----------------------------------------------------------------------------------------------- PlayBow
 def _bow():
     P = D.Pose()
-    P.body_rot = (20, 0, 0)
-    P.body_off = Vector((0, -0.02, -0.07))
+    P.body_rot = (30, 0, 0)
+    P.body_off = Vector((0, -0.02, -0.13))
     P.spine = {"Spine1": (-4, 0, 0), "Spine2": (-3, 0, 0), "Spine3": (2, 0, 0)}
-    P.neck = {"Neck1": (-26, 0, 0), "Neck2": (-12, 0, 0)}
-    P.head = (8, 0, 0)
-    P.legs["FL"] = D.LegPose(C.rest_mcp("FL") + Vector((0, -0.16, 0)), pastern=-42, toe=0, scap=10)
-    P.legs["FR"] = D.LegPose(C.rest_mcp("FR") + Vector((0, -0.16, 0)), pastern=-42, toe=0, scap=10)
-    P.tail = D.tail_shape(lift=60, curl=20)
+    P.neck = {"Neck1": (2, 0, 0), "Neck2": (2, 0, 0)}          # (8, 6) on the old head carriage (_common)
+    P.head = (-14, 0, 0)
+    P.legs["FL"] = D.LegPose(C.rest_mcp("FL") + Vector((0, -0.26, 0)), pastern=-60, toe=0, scap=-5)
+    P.legs["FR"] = D.LegPose(C.rest_mcp("FR") + Vector((0, -0.26, 0)), pastern=-60, toe=0, scap=-5)
+    P.tail = D.tail_shape(lift=40, curl=70)
     P.ears = {"L": (-12, 0, 0), "R": (-12, 0, 0)}
     P.jaw = 16; P.tongue = (0.02, 25, 0)
     return P

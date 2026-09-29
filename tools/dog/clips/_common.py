@@ -6,6 +6,11 @@ dog_animations.py from importing it as one).
   stand()               the rest pose (== Pose(), so every family's boundary pose matches Idle / the gaits)
   sit_pose() / lie_pose() / sniff_pose() / growl_pose()   the reusable held poses
   breathe / wag / pant  additive layers (periodic in the clip length, so loops stay exact)
+
+Head carriage: the rest head is set low (anatomy.HEAD_POS / HEAD_PITCH, the nose level with the withers top), which
+lowers the rest Neck1 by 6.1 deg and Neck2 by 10.0 deg (world elevation) and the head by 10 deg. Poses that set the
+neck and head explicitly were tuned on the old, higher carriage and carry the compensation Neck1 -6, Neck2 -4, Head 0
+(restores the world orientation of every neck and head bone); gaits and look-only idles inherit the low carriage.
 """
 import math, os, sys
 
@@ -61,12 +66,12 @@ def timeline(keys, f, lift=0.04):
 def sniff_pose():
     """nose to the ground: neck down, fore legs a little forward, the rump slightly up"""
     P = D.Pose()
-    P.body_rot = (6, 0, 0)
-    P.body_off = Vector((0, -0.01, -0.02))
-    P.spine = {"Spine1": (2, 0, 0), "Spine2": (3, 0, 0), "Spine3": (4, 0, 0)}
-    P.neck = {"Neck1": (38, 0, 0), "Neck2": (26, 0, 0)}
-    P.head = (18, 0, 0)
-    P.tail = D.tail_shape(lift=12, curl=12)
+    P.body_rot = (10, 0, 0)
+    P.body_off = Vector((0, -0.02, -0.05))
+    P.spine = {"Spine1": (3, 0, 0), "Spine2": (4, 0, 0), "Spine3": (6, 0, 0)}
+    P.neck = {"Neck1": (60, 0, 0), "Neck2": (16, 0, 0)}       # (66, 20) on the old carriage
+    P.head = (-28, 0, 0)
+    P.tail = D.tail_shape(lift=35, curl=75)
     P.ears = {"L": (-8, 0, 0), "R": (-8, 0, 0)}
     return P
 
@@ -75,30 +80,30 @@ def growl_pose():
     """aggressive stance: weight forward, head low and forward, lips lifted, ears back, tail up and stiff"""
     P = D.Pose()
     P.body_rot = (5, 0, 0)
-    P.body_off = Vector((0, -0.03, -0.035))
+    P.body_off = Vector((0, -0.03, -0.07))                      # a stalking crouch: legs flexed, belly low (GiM)
     P.spine = {"Spine1": (-2, 0, 0), "Spine2": (-1, 0, 0), "Spine3": (2, 0, 0)}
-    P.neck = {"Neck1": (12, 0, 0), "Neck2": (4, 0, 0)}
-    P.head = (-6, 0, 0)
+    P.neck = {"Neck1": (28, 0, 0), "Neck2": (8, 0, 0)}        # (34, 12) on the old carriage
+    P.head = (-34, 0, 0)
     P.jaw = 9; P.nose = 5
     # the paws stay where Idle has them (an Animator crossfade must not skate them)
-    P.tail = D.tail_shape(lift=55, curl=15)
-    P.ears = {"L": (35, -10, 0), "R": (35, 10, 0)}
-    P.ear_tip = {"L": 15, "R": 15}
+    P.tail = D.tail_shape(lift=35, curl=90)
+    P.ears = {"L": (0, 15, 15), "R": (0, -15, -15)}            # swung back and out, clear of the skull
+    P.ear_tip = {"L": 8, "R": 8}
     return P
 
 
 def sit_pose():
     """sitting square: the rump on the ground, hocks flat, fore legs straight, head level"""
     P = D.Pose()
-    P.body_rot = (-38, 0, 0)
-    P.body_off = Vector((0, 0.035, -0.195))
-    P.spine = {"Spine1": (4, 0, 0), "Spine2": (3, 0, 0), "Spine3": (1, 0, 0)}
-    P.neck = {"Neck1": (18, 0, 0), "Neck2": (14, 0, 0)}
-    P.head = (20, 0, 0)
-    P.legs["FL"] = leg("FL", dx=0.004, dy=-0.02); P.legs["FR"] = leg("FR", dx=-0.004, dy=-0.02)
+    P.body_rot = (-46, 0, 0)
+    P.body_off = Vector((0, 0.02, -0.155))
+    P.spine = {"Spine1": (0, 0, 0), "Spine2": (0, 0, 0), "Spine3": (0, 0, 0)}
+    P.neck = {"Neck1": (14, 0, 0), "Neck2": (6, 0, 0)}        # (20, 10) on the old carriage
+    P.head = (16, 0, 0)
+    P.legs["FL"] = leg("FL", dx=0.004, dy=0.05); P.legs["FR"] = leg("FR", dx=-0.004, dy=0.05)
     # hind: metatarsus flat on the ground, the paw forward under the chest
-    P.legs["HL"] = D.LegPose(Vector((0.108, 0.105, 0.036)), pastern=-86, toe=0)
-    P.legs["HR"] = D.LegPose(Vector((-0.108, 0.105, 0.036)), pastern=-86, toe=0)
+    P.legs["HL"] = D.LegPose(Vector((0.108, 0.080, 0.036)), pastern=-86, toe=0)
+    P.legs["HR"] = D.LegPose(Vector((-0.108, 0.080, 0.036)), pastern=-86, toe=0)
     P.tail = D.tail_shape(lift=-38, side=18, curl=-30)
     return P
 
@@ -110,13 +115,13 @@ def lie_pose():
     P.body_rot = (-2, 4, 0)
     P.body_off = Vector((0, 0.03, -0.300))
     P.spine = {"Spine1": (0, 3, 0), "Spine2": (0, 2, 0), "Spine3": (0, 0, 0)}
-    P.neck = {"Neck1": (-16, 0, 0), "Neck2": (-6, 0, 0)}
+    P.neck = {"Neck1": (-22, 0, 0), "Neck2": (-10, 0, 0)}     # (-16, -6) on the old carriage
     P.head = (24, 0, 0)
     # fore: forearms on the ground, paws forward
     for k, sx in (("FL", 1), ("FR", -1)):
-        P.legs[k] = D.LegPose(Vector((sx * 0.085, -0.575, 0.030)), pastern=-60, toe=0, scap=8)
+        P.legs[k] = D.LegPose(Vector((sx * 0.085, -0.575, 0.030)), pastern=-60, toe=0, scap=-10)
     for k, sx in (("HL", 1), ("HR", -1)):
-        P.legs[k] = D.LegPose(Vector((sx * 0.150, 0.020, 0.034)), pastern=-84, toe=0, pole=sx * 25)
+        P.legs[k] = D.LegPose(Vector((sx * 0.150, 0.020, 0.042)), pastern=-84, toe=0, pole=sx * 25)
     P.tail = D.tail_shape(lift=-62, side=30, curl=-20)
     return P
 

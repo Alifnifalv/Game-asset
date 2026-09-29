@@ -21,21 +21,22 @@ TAU = 2 * math.pi
 
 # name: speed m/s, frames per cycle, touch-down phase per leg, duty (front, hind), swing lift (front, hind) m,
 #       carpus fold deg, hock fold deg, toe roll deg, body bob m, body pitch deg, roll deg, spine side bend deg,
-#       spine flex deg (gallop), head bob deg, head pitch deg (neck carriage), tail lift deg, tail wag deg
+#       spine flex deg (gallop), head bob deg, head pitch deg (neck carriage), tail lift deg, tail wag deg,
+#       tail curl deg (the sickle carriage)
 GAITS = {
     "Walk_Slow": dict(v=0.55, N=34, td=dict(HL=0.0, FL=0.22, HR=0.5, FR=0.72), duty=(0.70, 0.70), lift=(0.055, 0.045),
                       carpus=80, hock=30, roll_off=28, bob=0.006, pitch=0.6, roll=1.2, side=3.0, flex=0.0,
-                      head_bob=1.5, neck=(22, 18), tail=(-5, 6), sniff=True),
+                      head_bob=1.5, neck=(22, 18), tail=(30, 6), curl=55, sniff=True),
     "Walk": dict(v=1.15, N=20, td=dict(HL=0.0, FL=0.22, HR=0.5, FR=0.72), duty=(0.60, 0.62), lift=(0.070, 0.055),
                  carpus=90, hock=35, roll_off=32, bob=0.008, pitch=0.8, roll=1.5, side=3.5, flex=0.0,
-                 head_bob=2.5, neck=(0, 0), tail=(10, 10), sniff=False),
+                 head_bob=2.5, neck=(0, 0), tail=(32, 10), curl=58, sniff=False),
     "Trot": dict(v=2.5, N=16, td=dict(FL=0.0, HR=0.0, FR=0.5, HL=0.5), duty=(0.42, 0.42), lift=(0.090, 0.075),
                  carpus=110, hock=45, roll_off=38, bob=0.016, pitch=0.8, roll=0.8, side=1.0, flex=0.0,
-                 head_bob=2.0, neck=(4, 2), tail=(22, 8), sniff=False),
+                 head_bob=2.0, neck=(4, 2), tail=(35, 8), curl=65, sniff=False),
     # rotary gallop, right fore lead: RH, LH, LF, RF
     "Gallop": dict(v=6.5, N=12, td=dict(HR=0.0, HL=0.10, FL=0.40, FR=0.50), duty=(0.26, 0.26), lift=(0.13, 0.11),
                    carpus=125, hock=60, roll_off=45, bob=0.030, pitch=7.0, roll=1.0, side=0.0, flex=9.0,
-                   head_bob=6.0, neck=(8, 4), tail=(18, 6), sniff=False),
+                   head_bob=6.0, neck=(8, 4), tail=(40, 6), curl=45, sniff=False),
 }
 # stance centre per leg relative to the rest paw (m, + = back): the fore paws land a bit ahead of the shoulder
 CENTRE = {"FL": 0.030, "FR": 0.030, "HL": -0.030, "HR": -0.030}
@@ -166,7 +167,7 @@ def gait_pose(rig, name, f, root_motion=False):
             P.head = (P.head[0] + 12, 8 * math.sin(TAU * t), 0)
             P.nose = 3.0 * max(0.0, math.sin(4 * TAU * t))
     # tail: lifted, swinging with the gait
-    P.tail = D.tail_shape(lift=g["tail"][0], curl=10, wag=g["tail"][1] * math.sin(TAU * t + 1.0))
+    P.tail = D.tail_shape(lift=g["tail"][0], curl=g.get("curl", 10), wag=g["tail"][1] * math.sin(TAU * t + 1.0))
     # ears bounce
     eb = 6 * math.sin(2 * TAU * t + 2.0) if name != "Gallop" else 14 * math.sin(TAU * t + 2.5) + 10
     P.ears = {"L": (eb, 0, 0), "R": (eb, 0, 0)}
