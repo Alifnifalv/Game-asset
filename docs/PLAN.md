@@ -29,6 +29,18 @@ female (`videoplayback.mp4`, a Simmental with horns and udder). Plan and state:
 5. Stage E: exact uniform scale to 1.42 x and `Cow*` names; export, validator, `Unity/Cow`, `CowSetup.cs`. *Done*
    (validator 266 / 0 / 0; nothing run in Unity: OI-01).
 
+## Rottweiler (male) (third asset)
+**Request (2026-09-29):** "now Rottweiler (male)", references and a sample asset in `Rottweiler (male)/`. Target: GiM
+Studio *Animalia - Rottweiler* (stills + `videoplayback (4).mp4`). The sample (870 tris, Rigify metarig, 9 clips) is only a
+reference; the dog has its own pipeline in `tools/dog/` (`bash tools/build_all.sh --asset dog`). Plan and state:
+1. Anatomy as signed-distance primitives on a breed-standard skeleton; mesh by marching cubes + decimation; LOD1/2 with
+   the same UV atlas; mouth interior, eyes, ears, claws, teeth, tongue. *Done* (first version; sculpted detail: OI-50).
+2. Rig (43 bones, jaw / tongue / ears / eyes / tail) and weights from the primitives' bones. *Done.*
+3. 4K black-and-tan coat painted from landmarks, fur normal map, AO; eye texture. *Done.*
+4. Animation library with analytic leg IK; 25 clips (gaits in place + `_RM`, idles, bark, growl, eat, sit, lie, jump,
+   attack, play bow, death) and a QA gate. *Done* (missing vs GiM: turns, rear-up, scratch: OI-52).
+5. Export, validator, `Unity/Rottweiler`, `RottweilerSetup.cs`, README. *Done* (Unity unverified: OI-01, OI-54).
+
 ## Phases
 
 1. **Model.** *Done.* Reshape the adult cow cage into a calf (`calf_stage_a.py`, `calf_stage_b.py`): proportions matched to the side-view silhouette, eyes, UVs, LODs.

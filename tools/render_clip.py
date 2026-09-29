@@ -9,10 +9,11 @@ ap.add_argument("src"); ap.add_argument("action"); ap.add_argument("out")
 ap.add_argument("--frames", default=None); ap.add_argument("--res", type=int, default=360)
 ap.add_argument("--samples", type=int, default=8); ap.add_argument("--side", default="left")
 ap.add_argument("--cols", type=int, default=6)
+ap.add_argument("--rig", default="CalfRig", help="armature object (RottweilerRig for the dog)")
 a = ap.parse_args(sys.argv[1:])
 bpy.ops.wm.open_mainfile(filepath=a.src)
 sc = bpy.context.scene
-arm = bpy.data.objects["CalfRig"]
+arm = bpy.data.objects[a.rig]
 act = bpy.data.actions[a.action]
 ad = arm.animation_data_create(); ad.action = act
 if act.slots: ad.action_slot = act.slots[0]

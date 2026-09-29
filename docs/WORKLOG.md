@@ -19,6 +19,7 @@ pending, see "Checkpoints"). Every open item is in "Open issues" below (IDs `OI-
 | Unity setup script, Animator, shell fur | Fixed after the review (U1-U10) and integrated: Death_Lying, time-scaled Trot/Gallop children (3.2-3.6 m/s crossfade), 0.35 s Lying_Idle → GetUp, 0.25 s Death blend. The current `CalfSetup.cs` compiles with Roslyn (C# 9) against Unity stubs; the review version also ran against fakes (90 + 12 checks); the shader compiles with DXC (1032 variants). Not run in Unity (OI-01). | `Unity/Calf/Editor/CalfSetup.cs`, `Unity/Calf/Fur/` |
 | Unity verification | **Not done.** Needs a machine with Unity (OI-01). | `Unity/Calf/README.md` "Not verified" |
 | One-command build | Done: `bash tools/build_all.sh` (422 s: textures 276 s, validator 89 s). The animations step fails on a QA-gate violation; `--skip-textures` re-links the old materials and refuses if the stage-B UVs changed; each run keeps a timestamped copy of the validator log. Read the "Do not" list in CLAUDE.md first (OI-29, OI-33). | `tools/build_all.sh`, `tools/relink_materials.py` |
+| Rottweiler (male) (`--asset dog`) | **Done (first version)**: own pipeline `tools/dog/` (SDF anatomy mesh, 43-bone rig, 4K black-and-tan textures, 25 clips with a QA gate), shared exporter/validator, `Unity/Rottweiler` with `RottweilerSetup.cs`. Open: OI-50..OI-54. | `tools/dog/`, log entry "Rottweiler (male)" |
 | Final multi-lens review | **Done**: 5 lenses (likeness, animation, export rig, unity code, docs), each "ship with fixes"; 58 findings fixed or deferred; integrated, retuned for the smaller head and rebuilt (log entry of the same name below). What stays open is OI-35..OI-43. | "Log" below |
 
 **Adult cow (second asset, 2026-09-29):** `bash tools/build_all.sh --asset cow` builds an adult Simmental cow into
@@ -88,6 +89,12 @@ Severity: major = visible in normal gameplay or blocks a use case; minor = close
 | OI-47 | Cow | Idle IK gap 3.84 mm at authoring scale (5.5 mm final), right fore f46-55: the source clip over-reaches on its own proportions. The gate allows 4 mm for the cow's Idle. | note | adult cow QA gate | accepted |
 | OI-48 | Cow | Death: the trunk goes 3.34 cm (authoring; 4.7 cm final) below the ground on the f33 impact frame (calf 1.04 cm); Leap and Death_Lying clamp a planted foot target by 5.0 / 6.6 mm (authoring; the calf's never clamp). | minor | adult cow actions QA | open |
 | OI-49 | Cow | The coat is procedural (domain-warped noise patches with the GiM layout biases), not a patch-for-patch copy of the GiM cow; the horns are the source's, shortened. No shell fur or fur cards. | note | adult cow | accepted |
+| OI-50 | Dog | The Rottweiler mesh is procedural (SDF anatomy, marching cubes, decimation): proportions and markings follow the breed and the GiM stills, but there is no sculpted detail (forehead wrinkles, skin folds at the neck, muscle definition), the ears are flat draped plates, the claws are long and thin, and there are no fur cards. | minor | Rottweiler | open |
+| OI-51 | Dog | Gallop: the hind push-off is out of reach, so `reach_pass` lowers the body up to 67 mm around it (body drop in the QA line); Trot 15 mm, Walk 1.3 mm. The gallop's body wave needs a redesign (as the calf's OI-36/37). | minor | Rottweiler QA | open |
+| OI-52 | Dog | Clip set: no turns in place, no rear-up / beg, no scratch, shake or drink (the GiM preview shows rear-up, scratch while sitting and a sniff-walk); `Death` has no root motion and falls over 28 frames (GiM faster); `Death` from a sit or lie blends from the standing start pose. | minor | Rottweiler vs GiM preview | open |
+| OI-53 | Dog | No eyelids (no blink) and no lip-lift shapes: `Growl`/`Attack` snarl with the `Nose` bone and the jaw only. | minor | Rottweiler | open |
+| OI-54 | Dog | `RottweilerSetup.cs` was generated from `CalfSetup.cs` and not compiled here (no .NET in the container; the calf's Unity stubs were not kept). Unity import unverified (OI-01). | major | Rottweiler | open |
+| OI-55 | Calf | Found while re-checking the shared validator for the Rottweiler: the committed `Unity/Calf` (checkpoint 02, exported 2026-09-28 18:25) does not match the calf rebuild left in `build/stage_d.blend` by the cow session (07:31, `build/logs/build_all_run3.out`: 267/0/0 against its own, uncommitted export): LOD0 rest vertices differ by up to 38.5 mm (near the left ear), so validating the committed FBX against that build gives 260 PASS / 6 FAIL (tangent basis x3, skin x2, rest vertices). The HEAD validator gives the same failures, so it is not a tool change. Cause unknown (a stage-B change after checkpoint 02, or non-determinism). | major | Rottweiler session | open: rebuild the calf, diff it against checkpoint 02, commit whichever is right |
 | OI-44 | Git | This environment's git proxy refuses tag pushes (403), so checkpoints are commits whose message starts with `CHECKPOINT NN:`. | note | CLAUDE.md checkpoint rule | accepted |
 
 ## Checkpoints (safe, pushed)
@@ -98,6 +105,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 | 01 | `cdcf752` (+ docs-only commits after it) | Full pipeline from cow.glb → `Unity/Calf`: calf mesh (3 LODs), 4K textures, 21 clips, FBX + GLB. Validator 175 PASS / 0 FAIL / 1 WARN as `build_all.sh` runs it (172 PASS without `--render-dir`; the WARN is the 4-influence skin, Gallop max 23.7 mm). Final multi-lens review in progress. |
 | 02 | `0dc4c35` (deliverable) + docs/tool fixes in the CHECKPOINT 02 commit | Final review integrated: 25 clips, validator 267 PASS / 0 FAIL / 0 WARN, QA gate pass |
 | 03 | the CHECKPOINT 03 commit | Adult cow added (`Unity/Cow`, `--asset cow`): 25 clips, validator 266 / 0 / 0, QA gate pass; calf rebuilt unchanged (267 / 0 / 0) |
+| 04 | the CHECKPOINT 04 commit | Rottweiler (male) added (`Unity/Rottweiler`, `--asset dog`, own pipeline `tools/dog/`): 3 LODs, 4K textures, 25 clips; dog QA gate pass, validator 264 PASS / 0 FAIL / 0 WARN; calf and cow deliverables untouched |
 
 ## Log
 
@@ -648,3 +656,65 @@ Renders (walk, death filmstrips; export contact sheets) checked by eye against t
 impact frame and two reach clamps, procedural coat). OI-01 covers `CowSetup.cs` too (not compiled here: no C# compiler
 in this session).
 
+### 2026-09-29: Rottweiler (male) (`--asset dog`, checkpoint 04)
+**What.** The user asked for the male Rottweiler ("now Rottweiler (male)"), with the GiM *Animalia - Rottweiler* stills and
+preview in `Rottweiler (male)/` and a sample asset in `Rottweiler (male)/Dog/`. The sample (DogGlb.glb: 870 tris, box
+head, stick legs, a 38-bone Rigify metarig, 9 clips at 24 fps) is far below the target, and the calf pipeline is built on
+`cow.glb`'s hoofed rig, so the dog got its own stages in `tools/dog/` and shares only the exporter and the validator.
+- **Mesh** (`anatomy.py`, `sdf.py`, `dog_stage_a.py`): ~110 signed-distance primitives (round cones, ellipsoids, rounded
+  boxes, smooth unions) laid on a breed-standard skeleton (withers 0.66 m, trunk 0.74 m, chest depth 50 %, skull:muzzle
+  3:2), each tagged with its bone(s). A 2 mm grid (59 M voxels) -> marching cubes (1.1 M tris, one component) ->
+  pymeshlab quadric decimation to 37.8 k tris. The lip line is cut open onto an oral cavity; eye sockets with lid rims
+  are carved around eyeballs placed on the skin surface. Separate parts: draped ear flaps (explicit two-sided sheets
+  following the head surface 4-10 mm off it), UV-sphere eyeballs (own material), 18 claws incl. dewclaws, teeth, a
+  3-bone tongue. One xatlas atlas (body + parts); LOD1/LOD2 decimated with their UVs (texture-aware quadric collapse
+  through an OBJ: pymeshlab.Mesh cannot set wedge texture indices). Weights: soft-min of the primitive distances (sigma
+  1 cm), chains split along their bones, the lip line split hard between Head/Nose and Jaw, 4 smoothing passes, 4
+  influences. Face attribute `part` (coat, mouth/socket, claw, nose, eye, pad, tooth, tongue, ear).
+- **Rig** (`dog_stage_b.py`): 43 bones incl. Nose, Jaw, Tongue1-3, Ear1/2, Eye, Scapula, FrontFoot/Toe, HindFoot/Toe,
+  Tail1-6; rolls with local X ~ -X world; never connected (see below).
+- **Textures** (`dog_textures.py`): own numpy rasteriser of the atlas (tri index + barycentrics per texel, 9.5 M texels at
+  4K), the coat painted in 3D from landmarks (eye spots, cheeks, muzzle sides and chin with a black bridge, throat bib, two
+  chest triangles, fore legs to mid-forearm and higher inside, hind legs up the front of the hock and inside the thighs,
+  under the tail; black lips / lid rims / nose / claws, dark pads, pink-lavender tongue, gums), a fur-clump normal map
+  (noise stretched along the hair flow, differentiated along each texel's tangent frame), AO from the anatomy SDF at the
+  vertices, procedural dark-brown iris. 178 s at 4096.
+- **Animation** (`dog_anim.py` + `clips/`): pose model -> analytic leg IK -> FK keys (no constraints). Scapula swing
+  (gain 0.75, clamped +-35 deg) and glide (<= 4 cm: no collarbone); pastern/metatarsus a hinge in the leg plane; hind
+  metatarsus follows the leg's sweep (hock never past straight); leg planes continuous frame to frame; `reach_pass`
+  lowers the body where a paw cannot reach. Families: `locomotion` (Walk_Slow/Walk/Trot/Gallop, in place + `_RM`:
+  lateral walk, diagonal trot, rotary gallop, paw roll-off, carpus/hock folds), `idles` (Idle, Idle_Pant,
+  Idle_LookAround, Idle_Sniff, Bark, Growl, Eat), `sit_lie` (Sit_Start/Idle/End, Lie_Start, Lying_Idle, Lie_End),
+  `actions` (Jump with 1.6 m root motion and world-planted paws, Attack, PlayBow, Death onto the right side with the legs
+  carried by the body). `dog_animations.py` runs them with a QA gate (IK gap, planted slide, loop seams, backward bends,
+  carpus dorsiflexion, per-frame leg twist, LOD2 ground).
+- **Shared tools**: `asset_profile.py` `ASSET=dog` (`Rottweiler`, `build/dog`, `Unity/Rottweiler`); `build_all.sh --asset
+  dog`; `validate_export.py` takes the dog's key bones, limb regex, one-shot boundaries, tail tip and size window from the
+  profile and finds `RottweilerRig`; `render_clip.py --rig`. Unity: `Unity/Rottweiler/Editor/RottweilerSetup.cs`
+  (from `CalfSetup.cs`: the dog's clip table, speeds, Sit/Lie chains, Sniff/Eat/Growl/Pant bools, one-shots, Death).
+
+**Bugs found on the way.** The first export was 1.37 m off on every bone: the exporter's rig axis bake transforms edit
+bones one at a time, and connected bones (child head = parent tail) got the rotation twice; the dog's bones are now never
+connected (the calf's imported bones never were). Exporters also drop duplicate triangles (decimation fins, 4 per LOD):
+stage A removes them. The hind "fold" had the wrong sign (a hock flexes with the paw forward), the carpus check counted
+flexion as extension, and the Death legs flipped until the scapula swing was clamped, the paw angles moved to the body
+frame and the legs were carried by the rolling body.
+
+**Verification.** `bash tools/build_all.sh --asset dog` (about 6 min: stage A 85 s, textures 164 s, animations 6 s,
+export 23 s, validator 78 s; `build/dog/logs/build_all_run.out`): every step ok; stage B reports 0 degenerate tangents;
+`QA GATE: pass (25 clips)` (rest self-test 1.3e-6; IK gap <= 0.008 mm; planted slide 0.00 mm on the `_RM` gaits, the idles
+and the Jump stances; loop seams <= 0.001 mm; no backward bends; leg twist <= 11.4 deg/f (Death); body drop Walk 1.3 mm,
+Trot 15 mm, Gallop 67 mm (OI-51)); validator **264 PASS / 0 FAIL / 0 WARN**: 43 bones, every take matches the source on
+every frame (~0.005 mm), skin on all 1,347 frames FBX <= 0.006 mm (every LOD) and GLB 0.008 mm, root travel Jump 1.600 m
+and the `_RM` gaits 0.623 / 0.767 / 1.333 / 2.600 m per cycle along +Z, no Root height / pitch / roll, clip boundaries
+vs Idle f0 <= 0.4 deg (Jump 3.3 deg at the tail tip), rest 1.175 x 0.889 x 0.390 m, faces +Z, Khronos glTF-Validator
+0 errors / 0 warnings, render check (Attack f15) identical boxes. LODs 45,594 / 11,008 / 3,114 tris; FBX 13.9 MB, GLB
+11.2 MB; `T_Rottweiler_BaseColor` 4096. The shared-tool changes were re-checked on the committed deliverables: the calf
+and the cow were re-validated into scratch folders: the cow 266 / 0 / 0 as at checkpoint 03; the calf 260 / 6 against
+the calf build in `build/`, identical with the HEAD validator (OI-55, not caused by this change).
+Renders (clay and textured contact sheets, walk / gallop / lie filmstrips) checked by eye against the GiM stills and the
+preview video.
+
+**Open.** OI-50..OI-54 (procedural mesh detail, gallop body drop, missing clips vs GiM, no eyelids / lip shapes,
+`RottweilerSetup.cs` not compiled), OI-01 (Unity), and OI-55 (found on the way: the committed calf does not match the
+calf build in `build/`; the cow re-validates 266 / 0 / 0).

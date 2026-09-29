@@ -1,4 +1,4 @@
-# Game-asset: Young Cow (Calf) and Adult Cow for Unity
+# Game-asset: Young Cow (Calf), Adult Cow and Rottweiler for Unity
 
 **Read this first, then `docs/WORKLOG.md` (current status, open issues, chronological log) and `docs/PLAN.md` (scope and phases).**
 `docs/REFERENCES.md` describes the look target, and `docs/anim_lying.md` is the handoff for the lying clips.
@@ -14,6 +14,12 @@ GiM adult female in `videoplayback.mp4` (a Simmental: red-pied, white head, shor
 tools with `ASSET=cow` (`bash tools/build_all.sh --asset cow`); see "Adult cow" below. The calf stays the default: every
 tool behaves exactly as before without `ASSET`.
 
+**Rottweiler (male) (third asset, `Unity/Rottweiler`):** the user asked for the male Rottweiler next ("now Rottweiler
+(male)"), with references in `Rottweiler (male)/` (GiM *Animalia - Rottweiler* stills and `videoplayback (4).mp4`) and a
+sample asset in `Rottweiler (male)/Dog/`. The sample (870 tris, 38-bone Rigify metarig, 9 clips) is far below the target,
+so the dog has its **own pipeline in `tools/dog/`** (procedural SDF anatomy -> mesh, rig, textures, clips) and shares only
+the exporter and validator: `bash tools/build_all.sh --asset dog`. See "Rottweiler" below.
+
 ## Repo layout
 | Path | What |
 |---|---|
@@ -25,6 +31,8 @@ tool behaves exactly as before without `ASSET`.
 | `build/` | **gitignored** intermediates (`stage_a..d.blend`, `textures/`, `logs/`, test outputs); regenerate with the tools |
 | `tools/asset_profile.py` | Which animal a run builds (`ASSET=calf` default, `ASSET=cow`): build dir, output dir, texture prefix, final scale. |
 | `build/cow/`, `Unity/Cow/` | The adult cow's intermediates (gitignored) and deliverables (git-tracked: FBX, GLB, `Textures/`, `Editor/CowSetup.cs`, README). |
+| `Rottweiler (male)/` | Rottweiler references (GiM stills `*.webp`, preview `videoplayback (4).mp4`) and the sample `Dog/` (DogGlb.glb, DogFBX.fbx, Dogs1.blend, BlackDog.png). Read-only. |
+| `tools/dog/` | The Rottweiler pipeline (stages A-D, `clips/` families, `dog_views.py`); `build/dog/` its intermediates (gitignored), `Unity/Rottweiler/` its deliverables (git-tracked). |
 | `Unity/Calf/` | Deliverables for Unity (FBX, GLB, textures, `Editor/CalfSetup.cs`, `Fur/`, README with import settings). **Git-tracked**, and rewritten by every full build. |
 | `docs/` | `WORKLOG.md` (status, open issues, log), `PLAN.md` (scope/phases), `REFERENCES.md` (reference files, video timestamp index, the user's close-up spec), `anim_lying.md` (lying family handoff) |
 
@@ -32,6 +40,8 @@ tool behaves exactly as before without `ASSET`.
 ```bash
 pip install bpy                       # Blender 5.0.1 as a Python module (no blender binary; download.blender.org is blocked)
 pip install "numpy<2" pillow "opencv-python-headless<4.11" imageio imageio-ffmpeg trimesh   # bpy pins numpy 1.26
+pip install scikit-image pymeshlab xatlas   # the Rottweiler's mesh stage (marching cubes, decimation, UV atlas)
+apt-get install -y libopengl0               # pymeshlab's meshing filters need libOpenGL.so.0 (else "filter not found")
 ```
 - Run scripts with `python3 tools/<script>.py` (they `import bpy`). Only Cycles on the CPU works (no GPU, no EEVEE).
 - There are 4 shared cores: keep test renders **≤480 px at ≤12 samples**. `render_views.py` defaults to 24 samples, so
@@ -82,7 +92,8 @@ Check tools:
 - `tools/rebake_leg_ik.py`: re-solve leg IK for imported clips.
 
 ### Do not
-- **Do not point experiments at `Unity/Calf/`, `Unity/Cow/` or `build/` (incl. `build/cow/`).** `build_all.sh` and `export_unity.py --out-dir Unity/Calf`
+- **Do not point experiments at `Unity/Calf/`, `Unity/Cow/`, `Unity/Rottweiler/` or `build/` (incl. `build/cow/`,
+  `build/dog/`).** `build_all.sh` and `export_unity.py --out-dir Unity/Calf`
   overwrite the committed deliverable, and `build/logs/` is the record of the last full build (a manual validator run
   after the build once left `validate.log` at 172 PASS while `build_all.log` said 175). Give re-exports and validator
   runs a scratch `--out-dir` / `--json` / `--render-dir`. If you did overwrite them, re-run the full build before
@@ -128,6 +139,50 @@ runs the same steps with `ASSET=cow` on `build/cow/` and writes `Unity/Cow/`. Wh
   5.0 mm, Death_Lying REACH 6.6 mm (the calf's are <= 0).
 - **Gate for the cow:** as below, with `build/cow/logs/`; final-review build: see `docs/WORKLOG.md` (validator 266
   checks: the calf's 267 minus the shell-fur texture check).
+
+### Rottweiler (`ASSET=dog`, `tools/dog/`)
+`bash tools/build_all.sh --asset dog` (about 8 min; logs in `build/dog/logs/`, run output `build/dog/logs/build_all_run.out`)
+writes `Unity/Rottweiler/`. Its own stages, then the shared `export_unity.py` / `validate_export.py`:
+```bash
+python3 tools/dog/dog_stage_a.py      # anatomy.py SDF (2 mm grid) -> marching cubes -> pymeshlab decimation; parts (draped ears,
+                                      # eyeballs, claws, teeth, tongue); xatlas UV atlas; LOD1/2 decimated WITH UVs; skin weights
+                                      # from the primitives' bones -> build/dog/stage_a.npz   (~90 s)
+python3 tools/dog/dog_stage_b.py      # Blender: RottweilerRig (43 bones, unconnected) + Rottweiler_LOD0/1/2 -> stage_b.blend
+python3 tools/dog/dog_textures.py --res 4096   # numpy atlas rasteriser + 3D-painted coat/markings, fur normal, SDF AO -> stage_c
+python3 tools/dog/dog_animations.py   # every tools/dog/clips/*.py family, QA GATE (exit 1) -> stage_d.blend
+```
+- **Anatomy** (`anatomy.py`): joints `J` (meters, faces -Y, withers 0.66 m, authored at final size: no scale stage) and the
+  SDF primitives, each tagged with its bone(s); the skin weights come from those tags (soft-min of the primitive distances,
+  chains split along their bones), the lip line is split hard between Head and Jaw. Change the shape there, then rebuild.
+  `sdf_preview.py` (5 s) + `dog_views.py` (clay contact sheet: side/front/back/top/3-4/head/paw) for shape work.
+- **Face attribute `part`**: 0 coat, 1 mouth interior / eye socket (cut surfaces), 2 claw, 3 nose leather, 4 eyeball,
+  5 paw pad, 6 tooth, 7 tongue, 8 ear. Materials `[0] M_Rottweiler_Body`, `[1] M_Rottweiler_Eye`.
+- **Rig**: `Root` > `Hips` > `Spine1-3` > `Neck1-2` > `Head` > `Nose`, `Jaw` > `Tongue1-3`, `Ear1/2.X`, `Eye.X`;
+  `Hips` > `Tail1-6`, `Thigh.X` > `Shin.X` > `HindFoot.X` > `HindToe.X`; `Spine3` > `Scapula.X` > `UpperArm.X` >
+  `Forearm.X` > `FrontFoot.X` > `FrontToe.X`. Rolls: local X ~ -X world (flexion = rotation about local X).
+  **Bones are never connected**: `export_unity.py`'s rig axis bake transforms edit bones one by one and a connected child
+  drags its parent's tail twice (the first dog export was 1.37 m off).
+- **Animation** (`dog_anim.py`): `Pose` -> analytic IK straight to FK keys (no constraints). Legs: `LegPose(mcp, pastern,
+  toe, scap, pole, local)` in the root frame; the scapula swings with the leg (gain 0.75, clamped +-35 deg) and glides up to
+  4 cm (no collarbone); 2-bone chain in the plane of the rest bend; the pastern/metatarsus is a hinge in that plane;
+  `reach_pass` lowers the body where a paw is out of reach (reported as "body drop"); leg planes are kept continuous frame
+  to frame. `Pose()` = rest (self-test 1e-6). Signs: `rot(pitch, yaw, roll)` pitch + = tip down (forward bone) / back-up
+  (hanging bone), yaw + = to the dog's left; `pastern` + = the lower end swings back (carpus flexion; for the HOCK flexion is
+  **negative**: the paw swings forward); `toe` + = tip down; `jaw` + = open; `local` 0..1 = paw angles in the ground or
+  the body frame (a body rolled onto its side). `_common.timeline` blends key poses and lifts stepping paws.
+- **Fast QA** (5-10 s): `ASSET=dog python3 tools/dog/dog_animations.py --in build/dog/stage_c.blend --out <scratch>/d.blend
+  [--only locomotion,idles,sit_lie,actions]`; each family also runs standalone: `python3 tools/dog/clips/<family>.py --in
+  build/dog/stage_b.blend --out-dir <scratch>`. Filmstrips: `python3 tools/render_clip.py <blend> <clip> <out> --rig
+  RottweilerRig`.
+- **Dog QA gate** (`dog_animations.py`): IK gap <= 0.1 mm, planted slide <= 0.1 mm (`_RM` gaits, idles, Jump stances),
+  loop seam <= 0.01 mm, elbow/stifle/hock never bend backward (> 0.5 deg), carpus dorsiflexion <= 65 deg, leg-bone twist
+  <= 12 deg per frame (the validator FAILs 15), LOD2 body and paws >= -2 cm.
+- The validator reads the dog's key bones / limb regex / clip boundaries / size window from `AP.IS_DOG`
+  (`validate_export.py`, after `STANDING_ENDS`).
+- **Gate for the dog:** as below, with `build/dog/logs/` and the dog QA gate. First build (checkpoint 04): `QA GATE: pass
+  (25 clips)`, validator **264 PASS / 0 FAIL / 0 WARN**, `T_Rottweiler_BaseColor` 4096. Stage B stops on a degenerate
+  MikkTSpace tangent (a UV fold in a decimated LOD; stage A decimates LOD2 from LOD1 and repairs folds). Known values:
+  body drop Walk 1.3 mm, Trot 15 mm, Gallop 67 mm (OI-51); leg twist max 11.4 deg/f (Death).
 
 ## Verification gate
 A state is **verified-good** (and may become a checkpoint) when:
@@ -249,7 +304,8 @@ python3 tools/validate_export.py --fbx <scratch>/Calf/Calf.fbx --glb <scratch>/C
 - Keep the tools deterministic and parameterised (`--in`/`--out`), because each stage is re-run when an earlier stage changes.
 - After each milestone, update the "Current status" and "Open issues" tables in `docs/WORKLOG.md`, append a log entry
   (what changed, why, verification numbers, next steps) and commit.
-- Development branch: `claude/zealous-cray-le9agd` (the calf's history came from `claude/peaceful-lamport-fk2lw7`, merged in PR #1).
+- Development branch: `claude/zealous-cray-le9agd` (the calf's history came from `claude/peaceful-lamport-fk2lw7`, merged in PR #1;
+  the cow in PR #2).
 - **Safe checkpoints (user rule):** whenever the repo reaches a verified-good state (see "Verification gate"), make a
   commit whose message starts with `CHECKPOINT NN: <short name>` and **push it**. Add a row to the "Checkpoints" table in
   `docs/WORKLOG.md`. (This environment's git proxy only allows pushing the working branch, so pushed tags are rejected

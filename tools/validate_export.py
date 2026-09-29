@@ -463,6 +463,16 @@ LIMB_RE = re.compile(r"(Leg|^FF)")      # leg chain + hoof bones: the tight twis
 STANDING_ENDS = {"TurnLeft90": "both", "TurnRight90": "both", "Leap": "both", "HeadShake": "both", "Call": "both",
                  "Idle_LookAround": "both", "Graze_Start": "start", "Graze_End": "end", "LieDown": "start",
                  "GetUp": "end", "Death": "start"}
+TAIL_TIP = "Tail7"
+SIZE_WINDOW = ((0.8, 1.4), (1.4, 2.0))      # plausible (height, length) at FINAL_SCALE 1
+if AP.IS_DOG:     # the Rottweiler rig (tools/dog/): paw bones, a 6-bone tail, its own clip set and size
+    KEY_BONES = ["Head", "FrontToe.L", "FrontToe.R", "HindToe.L", "HindToe.R", "Tail6"]
+    KEY_FALLBACK = {}
+    LIMB_RE = re.compile(r"(Arm|Forearm|Front|Thigh|Shin|Hind)")
+    STANDING_ENDS = {"Bark": "both", "Attack": "both", "PlayBow": "both", "Jump": "both", "Sit_Start": "start",
+                     "Sit_End": "end", "Lie_Start": "start", "Lie_End": "end", "Death": "start"}
+    TAIL_TIP = "Tail6"
+    SIZE_WINDOW = ((0.75, 1.0), (1.0, 1.4))  # withers 0.66 m (head 0.89 m), 1.18 m nose to hanging tail
 
 
 # ============================================================================================ numpy transform helpers
@@ -724,7 +734,8 @@ def bbox(pts):
 def load_source(a, manifest):
     bpy.ops.wm.open_mainfile(filepath=a.src)
     sc = bpy.context.scene
-    arm = bpy.data.objects.get("CalfRig") or bpy.data.objects.get("CowRig") or find_armature()
+    arm = (bpy.data.objects.get("CalfRig") or bpy.data.objects.get("CowRig") or bpy.data.objects.get(AP.NAME + "Rig")
+           or find_armature())
     lods = [o for o in lod_objects() if any(m.type == "ARMATURE" and m.object == arm for m in o.modifiers) or o.parent == arm]
     S = {"fps": sc.render.fps / sc.render.fps_base, "arm": arm.name}
     S["bones_all"] = [b.name for b in arm.data.bones]
@@ -1131,8 +1142,8 @@ def check_fbx_raw(a, S, expect_tex):
     def unity(n):
         p = W[limbs[n]].translation * unit
         return Vector((-p.x, p.y, p.z))
-    if "Head" in limbs and "Tail7" in limbs:
-        h, t = unity("Head"), unity("Tail7")
+    if "Head" in limbs and TAIL_TIP in limbs:
+        h, t = unity("Head"), unity(TAIL_TIP)
         lft = [unity(n) for n in limbs if n.endswith(".L") and not n.startswith("PoleTarget")]
         lx = sum(p.x for p in lft) / max(1, len(lft))
         check(sec, "facing (Unity space)", h.z > t.z and h.y > 0.3 and lx < 0,
@@ -1349,7 +1360,7 @@ def check_fbx_import(a, S, expect_tex):
     rest = bone_samples(arm, S["bones"], S["lengths"], [0])[0]
     e = max(point_err(rest[n], S["rest"][n]) for n in S["bones"] if n in rest)
     check(sec, "rest skeleton vs source", e <= a.tol_mm / 1000, "max error %s (joint heads, bone-axis and off-axis points)" % mm(e))
-    head, tail = rest["Head"][0], rest["Tail7"][0] if "Tail7" in rest else rest[S["bones"][-1]][0]
+    head, tail = rest["Head"][0], rest[TAIL_TIP][0] if TAIL_TIP in rest else rest[S["bones"][-1]][0]
     check(sec, "facing", head[1] < tail[1] and head[2] > 0.3,
           "Head y=%.3f < Tail7 y=%.3f (Blender -Y front = Unity +Z), Head z=%.3f" % (head[1], tail[1], head[2]))
     for n, (lo, hi) in S["actions"].items():
@@ -1377,8 +1388,9 @@ def check_fbx_import(a, S, expect_tex):
         smn, smx = bbox(S["rest_coords"])
         dim, sdim = mx - mn, smx - smn
         k = AP.FINAL_SCALE      # plausible size window: calf 0.8-1.4 m high, 1.4-2.0 m long; the adult cow x1.42
-        ok = np.abs(mn - smn).max() < 0.002 and np.abs(mx - smx).max() < 0.002 and 0.8 * k < dim[2] < 1.4 * k \
-            and 1.4 * k < dim[1] < 2.0 * k
+        (h0, h1), (l0, l1) = SIZE_WINDOW
+        ok = np.abs(mn - smn).max() < 0.002 and np.abs(mx - smx).max() < 0.002 and h0 * k < dim[2] < h1 * k \
+            and l0 * k < dim[1] < l1 * k
         check(sec, "rest dimensions", ok, "L(y) %.3f m, H(z) %.3f m, W(x) %.3f m (source %.3f / %.3f / %.3f), ground z=%.4f" %
               (dim[1], dim[2], dim[0], sdim[1], sdim[2], sdim[0], mn[2]))
         if co.shape == S["rest_coords"].shape:
@@ -1499,9 +1511,9 @@ def check_glb_raw(a, S, expect_tex):
             e = max(e, max(abs(D[r][c] - (1.0 if r == c else 0.0)) for r in range(4) for c in range(4)))
         check(sec, "inverse bind matrices", e < 1e-4, "rest joint matrices max |mesh^-1 @ joint @ IBM - I| = %.1e" % e)
     h = (YUP_TO_BL @ W[jidx["Head"]]).translation if "Head" in jidx else None
-    t = (YUP_TO_BL @ W[jidx["Tail7"]]).translation if "Tail7" in jidx else None
+    t = (YUP_TO_BL @ W[jidx[TAIL_TIP]]).translation if TAIL_TIP in jidx else None
     if h is not None and t is not None:
-        gh, gt = W[jidx["Head"]].translation, W[jidx["Tail7"]].translation
+        gh, gt = W[jidx["Head"]].translation, W[jidx[TAIL_TIP]].translation
         check(sec, "facing (glTF space)", gh.z > gt.z and gh.y > 0.3,
               "Head z=%.3f > Tail7 z=%.3f: front = glTF +Z (glTF convention), up = +Y" % (gh.z, gt.z))
     # animations
@@ -1614,9 +1626,9 @@ def check_glb_import(a, S):
     rest = bone_samples(arm, S["bones"], S["lengths"], [0])[0]
     e = max(point_err(rest[n], S["rest"][n]) for n in S["bones"] if n in rest)
     check(sec, "rest skeleton vs source", e <= a.tol_mm / 1000, "max error %s (joint heads, bone-axis and off-axis points)" % mm(e))
-    if "Head" in rest and "Tail7" in rest:
-        check(sec, "facing", rest["Head"][0][1] < rest["Tail7"][0][1],
-              "Head y=%.3f < Tail7 y=%.3f" % (rest["Head"][0][1], rest["Tail7"][0][1]))
+    if "Head" in rest and TAIL_TIP in rest:
+        check(sec, "facing", rest["Head"][0][1] < rest[TAIL_TIP][0][1],
+              "Head y=%.3f < %s y=%.3f" % (rest["Head"][0][1], TAIL_TIP, rest[TAIL_TIP][0][1]))
     for n, (lo, hi) in S["actions"].items():
         if n not in acts:
             continue

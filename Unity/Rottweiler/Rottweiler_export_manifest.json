@@ -1,0 +1,541 @@
+{
+ "source": "/home/user/Game-asset/build/dog/stage_d.blend",
+ "source_mtime": "2026-09-29T09:24:57",
+ "exported": "2026-09-29T09:24:57",
+ "blender": "5.0.1",
+ "files": {
+  "Rottweiler.glb": 11174200,
+  "Rottweiler.fbx": 13900044,
+  "Textures/T_RottweilerEye_BaseColor.png": 191637,
+  "Textures/T_Rottweiler_AO.png": 1685091,
+  "Textures/T_Rottweiler_BaseColor.png": 8007343,
+  "Textures/T_Rottweiler_MaskMap.png": 2637027,
+  "Textures/T_Rottweiler_MetallicSmoothness.png": 435367,
+  "Textures/T_Rottweiler_Normal.png": 14537862,
+  "Textures/T_Rottweiler_Roughness.png": 305704
+ },
+ "glb": {
+  "objects": [
+   "RottweilerRig",
+   "Rottweiler_LOD0"
+  ],
+  "textures_wired": [],
+  "texture_max_res": 2048,
+  "textures_reduced": [
+   {
+    "image": "T_Rottweiler_BaseColor",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   },
+   {
+    "image": "T_Rottweiler_Roughness",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   },
+   {
+    "image": "T_Rottweiler_Normal",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   },
+   {
+    "image": "T_Rottweiler_AO",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   }
+  ],
+  "double_sided": false
+ },
+ "armature": "RottweilerRig",
+ "fps": 30.0,
+ "bones": [
+  "Root",
+  "Hips",
+  "Spine1",
+  "Spine2",
+  "Spine3",
+  "Neck1",
+  "Neck2",
+  "Head",
+  "Nose",
+  "Jaw",
+  "Tongue1",
+  "Tongue2",
+  "Tongue3",
+  "Ear1.L",
+  "Ear2.L",
+  "Eye.L",
+  "Ear1.R",
+  "Ear2.R",
+  "Eye.R",
+  "Scapula.L",
+  "UpperArm.L",
+  "Forearm.L",
+  "FrontFoot.L",
+  "FrontToe.L",
+  "Scapula.R",
+  "UpperArm.R",
+  "Forearm.R",
+  "FrontFoot.R",
+  "FrontToe.R",
+  "Tail1",
+  "Tail2",
+  "Tail3",
+  "Tail4",
+  "Tail5",
+  "Tail6",
+  "Thigh.L",
+  "Shin.L",
+  "HindFoot.L",
+  "HindToe.L",
+  "Thigh.R",
+  "Shin.R",
+  "HindFoot.R",
+  "HindToe.R"
+ ],
+ "bones_source": [
+  "Root",
+  "Hips",
+  "Spine1",
+  "Spine2",
+  "Spine3",
+  "Neck1",
+  "Neck2",
+  "Head",
+  "Nose",
+  "Jaw",
+  "Tongue1",
+  "Tongue2",
+  "Tongue3",
+  "Ear1.L",
+  "Ear2.L",
+  "Eye.L",
+  "Ear1.R",
+  "Ear2.R",
+  "Eye.R",
+  "Scapula.L",
+  "UpperArm.L",
+  "Forearm.L",
+  "FrontFoot.L",
+  "FrontToe.L",
+  "Scapula.R",
+  "UpperArm.R",
+  "Forearm.R",
+  "FrontFoot.R",
+  "FrontToe.R",
+  "Tail1",
+  "Tail2",
+  "Tail3",
+  "Tail4",
+  "Tail5",
+  "Tail6",
+  "Thigh.L",
+  "Shin.L",
+  "HindFoot.L",
+  "HindToe.L",
+  "Thigh.R",
+  "Shin.R",
+  "HindFoot.R",
+  "HindToe.R"
+ ],
+ "dropped_helper_bones": [],
+ "helper_policy": "dropped: unweighted leaf IK pole helpers; clips are baked FK so nothing references them",
+ "non_deforming_bones_kept": [],
+ "lods": {
+  "Rottweiler_LOD0": {
+   "tris": 45594,
+   "verts": 23019,
+   "polys": 45594,
+   "materials": [
+    "M_Rottweiler_Eye",
+    "M_Rottweiler_Body"
+   ]
+  },
+  "Rottweiler_LOD1": {
+   "tris": 11008,
+   "verts": 5726,
+   "polys": 11008,
+   "materials": [
+    "M_Rottweiler_Eye",
+    "M_Rottweiler_Body"
+   ]
+  },
+  "Rottweiler_LOD2": {
+   "tris": 3114,
+   "verts": 1779,
+   "polys": 3114,
+   "materials": [
+    "M_Rottweiler_Eye",
+    "M_Rottweiler_Body"
+   ]
+  }
+ },
+ "weights": {
+  "Rottweiler_LOD0": {
+   "verts": 23019,
+   "max_before": 4,
+   "max_after": 4,
+   "over_limit": 0,
+   "zero_or_foreign_removed": 0,
+   "max_dropped_weight": 0.0,
+   "unweighted": 0,
+   "method": "truncate",
+   "ngons_triangulated": 0
+  },
+  "Rottweiler_LOD1": {
+   "verts": 5726,
+   "max_before": 4,
+   "max_after": 4,
+   "over_limit": 0,
+   "zero_or_foreign_removed": 0,
+   "max_dropped_weight": 0.0,
+   "unweighted": 0,
+   "method": "truncate",
+   "ngons_triangulated": 0
+  },
+  "Rottweiler_LOD2": {
+   "verts": 1779,
+   "max_before": 4,
+   "max_after": 4,
+   "over_limit": 0,
+   "zero_or_foreign_removed": 0,
+   "max_dropped_weight": 0.0,
+   "unweighted": 0,
+   "method": "truncate",
+   "ngons_triangulated": 0
+  }
+ },
+ "weight_fit": {
+  "method": "none (source already within the influence limit)",
+  "frames_total": 1347,
+  "actions": [
+   "Attack",
+   "Bark",
+   "Death",
+   "Eat",
+   "Gallop",
+   "Gallop_RM",
+   "Growl",
+   "Idle",
+   "Idle_LookAround",
+   "Idle_Pant",
+   "Idle_Sniff",
+   "Jump",
+   "Lie_End",
+   "Lie_Start",
+   "Lying_Idle",
+   "PlayBow",
+   "Sit_End",
+   "Sit_Idle",
+   "Sit_Start",
+   "Trot",
+   "Trot_RM",
+   "Walk",
+   "Walk_RM",
+   "Walk_Slow",
+   "Walk_Slow_RM"
+  ]
+ },
+ "max_influences": 4,
+ "takes": [
+  {
+   "name": "Attack",
+   "frame_start": 0.0,
+   "frame_end": 34.0,
+   "frames": 35,
+   "seconds": 1.1333333333333333,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Bark",
+   "frame_start": 0.0,
+   "frame_end": 40.0,
+   "frames": 41,
+   "seconds": 1.3333333333333333,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Death",
+   "frame_start": 0.0,
+   "frame_end": 80.0,
+   "frames": 81,
+   "seconds": 2.6666666666666665,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Eat",
+   "frame_start": 0.0,
+   "frame_end": 60.0,
+   "frames": 61,
+   "seconds": 2.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Gallop",
+   "frame_start": 0.0,
+   "frame_end": 12.0,
+   "frames": 13,
+   "seconds": 0.4,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Gallop_RM",
+   "frame_start": 0.0,
+   "frame_end": 12.0,
+   "frames": 13,
+   "seconds": 0.4,
+   "cyclic": true,
+   "root_motion": true
+  },
+  {
+   "name": "Growl",
+   "frame_start": 0.0,
+   "frame_end": 60.0,
+   "frames": 61,
+   "seconds": 2.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Idle",
+   "frame_start": 0.0,
+   "frame_end": 120.0,
+   "frames": 121,
+   "seconds": 4.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Idle_LookAround",
+   "frame_start": 0.0,
+   "frame_end": 150.0,
+   "frames": 151,
+   "seconds": 5.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Idle_Pant",
+   "frame_start": 0.0,
+   "frame_end": 60.0,
+   "frames": 61,
+   "seconds": 2.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Idle_Sniff",
+   "frame_start": 0.0,
+   "frame_end": 60.0,
+   "frames": 61,
+   "seconds": 2.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Jump",
+   "frame_start": 0.0,
+   "frame_end": 44.0,
+   "frames": 45,
+   "seconds": 1.4666666666666666,
+   "cyclic": false,
+   "root_motion": true
+  },
+  {
+   "name": "Lie_End",
+   "frame_start": 0.0,
+   "frame_end": 50.0,
+   "frames": 51,
+   "seconds": 1.6666666666666667,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Lie_Start",
+   "frame_start": 0.0,
+   "frame_end": 60.0,
+   "frames": 61,
+   "seconds": 2.0,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Lying_Idle",
+   "frame_start": 0.0,
+   "frame_end": 120.0,
+   "frames": 121,
+   "seconds": 4.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "PlayBow",
+   "frame_start": 0.0,
+   "frame_end": 64.0,
+   "frames": 65,
+   "seconds": 2.1333333333333333,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Sit_End",
+   "frame_start": 0.0,
+   "frame_end": 30.0,
+   "frames": 31,
+   "seconds": 1.0,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Sit_Idle",
+   "frame_start": 0.0,
+   "frame_end": 90.0,
+   "frames": 91,
+   "seconds": 3.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Sit_Start",
+   "frame_start": 0.0,
+   "frame_end": 36.0,
+   "frames": 37,
+   "seconds": 1.2,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Trot",
+   "frame_start": 0.0,
+   "frame_end": 16.0,
+   "frames": 17,
+   "seconds": 0.5333333333333333,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Trot_RM",
+   "frame_start": 0.0,
+   "frame_end": 16.0,
+   "frames": 17,
+   "seconds": 0.5333333333333333,
+   "cyclic": true,
+   "root_motion": true
+  },
+  {
+   "name": "Walk",
+   "frame_start": 0.0,
+   "frame_end": 20.0,
+   "frames": 21,
+   "seconds": 0.6666666666666666,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Walk_RM",
+   "frame_start": 0.0,
+   "frame_end": 20.0,
+   "frames": 21,
+   "seconds": 0.6666666666666666,
+   "cyclic": true,
+   "root_motion": true
+  },
+  {
+   "name": "Walk_Slow",
+   "frame_start": 0.0,
+   "frame_end": 34.0,
+   "frames": 35,
+   "seconds": 1.1333333333333333,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Walk_Slow_RM",
+   "frame_start": 0.0,
+   "frame_end": 34.0,
+   "frames": 35,
+   "seconds": 1.1333333333333333,
+   "cyclic": true,
+   "root_motion": true
+  }
+ ],
+ "fbx_options": {
+  "use_selection": true,
+  "use_visible": false,
+  "use_active_collection": false,
+  "object_types": [
+   "ARMATURE",
+   "MESH"
+  ],
+  "global_scale": 1.0,
+  "apply_unit_scale": true,
+  "apply_scale_options": "FBX_SCALE_ALL",
+  "axis_forward": "-Z",
+  "axis_up": "Y",
+  "bake_space_transform": true,
+  "use_mesh_modifiers": true,
+  "use_mesh_modifiers_render": true,
+  "mesh_smooth_type": "FACE",
+  "use_subsurf": false,
+  "use_mesh_edges": false,
+  "use_tspace": true,
+  "use_triangles": false,
+  "use_custom_props": false,
+  "colors_type": "NONE",
+  "prioritize_active_color": false,
+  "add_leaf_bones": false,
+  "primary_bone_axis": "Y",
+  "secondary_bone_axis": "X",
+  "use_armature_deform_only": true,
+  "armature_nodetype": "NULL",
+  "bake_anim": true,
+  "bake_anim_use_all_bones": true,
+  "bake_anim_use_nla_strips": true,
+  "bake_anim_use_all_actions": false,
+  "bake_anim_force_startend_keying": true,
+  "bake_anim_step": 1.0,
+  "bake_anim_simplify_factor": 0.0,
+  "path_mode": "RELATIVE",
+  "embed_textures": false,
+  "batch_mode": "OFF",
+  "use_metadata": true
+ },
+ "rig_axis_bake": true,
+ "textures": [
+  "T_RottweilerEye_BaseColor.png",
+  "T_Rottweiler_AO.png",
+  "T_Rottweiler_BaseColor.png",
+  "T_Rottweiler_MaskMap.png",
+  "T_Rottweiler_MetallicSmoothness.png",
+  "T_Rottweiler_Normal.png",
+  "T_Rottweiler_Roughness.png"
+ ]
+}
