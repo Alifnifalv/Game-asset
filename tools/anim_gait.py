@@ -115,6 +115,23 @@ WALK_SLOW = Gait("Walk_Slow", frames=36, stride=0.54, duty=0.68,
                  roll=1.4, sway=0.010, head_nod=3.5, head_nod_per_cycle=2, head_nod_phase=0.30,
                  neck_carriage=4.0, tail_swing=3.0, shoulder_glide=0.022, femur_swing=12.0)
 
+# Adult cow (ASSET=cow, tools/asset_profile.py): the clips are authored on a rig of the calf's height and scaled up by
+# FINAL_SCALE afterwards (stage E), so strides stay as they are here (they scale with the body). Cycle times follow
+# dynamic similarity (equal Froude number): x sqrt(FINAL_SCALE) = 1.19 (Walk 24 -> 29 f, Trot 16 -> 19, Gallop
+# 14 -> 17, Walk_Slow 36 -> 43), final speeds Walk_Slow 0.54, Walk 1.09, Trot 2.80, Gallop 5.13 m/s. The heavier
+# adult steps a little lower and bounces less.
+try:
+    import asset_profile as _AP
+except ImportError:                         # imported from elsewhere without tools/ on sys.path
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    import asset_profile as _AP
+if _AP.IS_COW:
+    def _adult(g: Gait) -> Gait:
+        return replace(g, frames=round(g.frames * _AP.TIME_SCALE), lift={k: v * 0.9 for k, v in g.lift.items()},
+                       bob=g.bob * 0.85)
+    WALK_SLOW, WALK, TROT, GALLOP = (_adult(g) for g in (WALK_SLOW, WALK, TROT, GALLOP))
+
 GAITS = {g.name: g for g in (WALK_SLOW, WALK, TROT, GALLOP)}
 
 

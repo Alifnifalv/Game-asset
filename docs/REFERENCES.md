@@ -11,7 +11,7 @@ reference media.
 | `2259689e-8b00-47fa-9263-9bfc88ca6d72.webp` | The same calf in a scene, side view, walking; the adult cow in the background. Session scratchpads also held it as `ref2.png` (a pixel-identical PNG copy). | WebP 1920 × 1080 |
 | `videoplayback (1).mp4` | GiM young cow animation preview, **1080p**. Use it for motion and for close-up stills (index below). | H.264 1920 × 1080, 30 fps, 43.3 s |
 | `Young Cow animation preview.mp4` | The same preview at low resolution. | H.264 640 × 360, 30 fps, 43.3 s |
-| `videoplayback.mp4` | GiM **adult female** cow preview (not the calf: use only for gait and behaviour). | H.264 1280 × 720, 30 fps, 46.5 s |
+| `videoplayback.mp4` | GiM **adult female** cow preview: the look target of the adult cow (`--asset cow`, index below); for the calf use it only for gait and behaviour. | H.264 1280 × 720, 30 fps, 46.5 s |
 
 ## Timestamp index of `videoplayback (1).mp4`
 Checked on a contact sheet of the video. The camera is fixed and the calf moves in a ground bowl.
@@ -38,6 +38,27 @@ python3 -c "import sys, imageio.v3 as iio; t = float(sys.argv[1]); iio.imwrite(f
 Earlier sessions kept crops of such stills (1520 × 900) as `<scratchpad>/hd/calf_<t>s.jpg` for t = 7.0, 8.0, 9.1, 11.4,
 14.0, 17.0, 20.0, 23.0, 25.0, 30.0, 33.0, 36.4 and 38.7 s. Scratchpads do not survive the session, so regenerate them
 with the command above.
+
+## Adult cow: `videoplayback.mp4` (the `--asset cow` build)
+The look and motion target of the adult cow (`Unity/Cow`). Checked on a 1.5 s contact sheet (1280 x 720, 30 fps, 46.5 s).
+
+| Time (s) | Content | Our clip |
+|---|---|---|
+| 0-5 | Title cards ("COW", "bos taurus taurus", "animation preview") | - |
+| ~5.5-9.5 | Walk | `Walk_Slow`, `Walk` |
+| ~10-12 | Trot into gallop; 11.5 s: bounding stride, head up, tail out | `Trot`, `Gallop`, `Leap` |
+| ~13-22 | Grazing: muzzle on the grass, one fore stepped forward | `Graze_*` |
+| ~23-28.5 | Standing idle, looking around (28 s: best full side still) | `Idle`, `Idle_LookAround` |
+| ~29-30 | Death: on her right side, legs out, head on the ground | `Death` |
+| ~31-44 | Sternal lying, head turning (37-41 s: head toward the camera) | `Lying_Idle` |
+| 44.5 | Credits card | - |
+
+Look (28 s and 11.5 s stills): Simmental / Fleckvieh. Light red-tan neck, shoulders, barrel and rump broken by irregular,
+jagged white patches (a white saddle behind the withers, white flecks along the patch borders); white head with tan ears
+and a little tan at the poll; white throat, brisket, belly, lower legs and tail; short cream horns curving up and out
+with darker tips; a large pink udder with four teats; dark slate hooves; grey-pink muzzle with dark nostrils; big dark
+eyes. Sampled colours (lit, 9 x 9 px means): tan 188,132,105; horn 217,192,163; hoof 99,103,123; ear outside 114,71,60.
+Scale: withers about 1.4 m (the build uses 1.42 x the calf's authoring rig).
 
 ## Close-up spec from the user (GiM close-ups, not on disk)
 Use this as a checklist when judging the head, coat and lying pose.

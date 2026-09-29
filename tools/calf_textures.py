@@ -25,6 +25,11 @@ Pipeline
        normal bake)  T_CalfEye_BaseColor.png (1024)
   4. Materials M_Calf_Body / M_Calf_Eye rebuilt on all LODs, images referenced by relative path (or --pack).
 
+Adult cow (ASSET=cow): _cow_layout() replaces the calf patch layout with a Simmental coat (GiM adult female:
+light red-tan with irregular white patches, white head / belly / lower legs / tail, tan ears), the part colours
+switch (dark slate hooves, grey-pink muzzle) and two more parts are painted: horns (orig_part 5, cream with dark
+tips) and the udder with its teats (orig_part 6, pink skin). Textures are named T_Cow_* / T_CowEye_*.
+
 Deterministic: all noise uses fixed seeds.
 """
 import argparse, math, os, re, sys, time
@@ -32,6 +37,10 @@ import argparse, math, os, re, sys, time
 import numpy as np
 import bpy
 import bmesh
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import asset_profile as AP
+TEX, TEX_EYE = AP.TEX, AP.TEX_EYE          # "T_Calf" / "T_CalfEye" (calf), "T_Cow" / "T_CowEye" (adult cow)
 
 T0 = time.time()
 
@@ -713,6 +722,21 @@ class PatternCtx:
                 self.hoof_rim = Pc[near]
                 if len(self.hoof_rim) > 6000:
                     self.hoof_rim = self.hoof_rim[rs.choice(len(self.hoof_rim), 6000, replace=False)]
+        # cow: horn base -> tip axis per side, udder / teat heights
+        self.horn = {}
+        hm = part == AP.PART_HORN
+        for sx in (1, -1):
+            q = P[hm & (np.sign(P[:, 0]) == sx)]
+            if len(q) > 20:
+                ax_ = np.abs(q[:, 0])
+                b_ = q[ax_ <= np.percentile(ax_, 8)].mean(0)
+                t_ = q[np.argmax(np.linalg.norm(q - b_, axis=1))]
+                self.horn[sx] = (b_, t_)
+        um = part == AP.PART_UDDER
+        if um.any():
+            zu = P[um, 2]
+            self.udder_zmin, self.udder_top = float(zu.min()), float(zu.max())
+            self.teat_z = self.udder_zmin + 0.043     # teats are 0.20 original units = 4.5 cm at authoring scale
         # eyelid edge points (texture lid rim is measured from the real socket boundary, not the eyeball sphere)
         self.lid_pts = LM.get("lid_pts", np.zeros((0, 3)))
         self.mouth = LM.get("mouth", [])
@@ -748,6 +772,63 @@ def coat_pattern(P, Nr, part, w, LM, texel, seed, chunk=1 << 20):
         log("  pattern: %d/%d texels  %.1fs" % (sl.stop, N, time.time() - t0))
     log("  pattern: done %.1fs (fa=%.0f/m, texel=%.2fmm)" % (time.time() - t0, ctx.fa, texel * 1000))
     return col, rough, height, {"fa": ctx.fa}
+
+
+def _cow_layout(ctx, P, Nr, part, w, yw, zw, dt, db, edge, strand, legF, legH, headm, tailm, torso):
+    """Simmental coat of the adult cow (GiM adult female, videoplayback.mp4 5-30 s): light red-tan neck, shoulders,
+    barrel and rump broken by irregular jagged white patches (largest over the back behind the withers, the loin and
+    the rump), white head with tan ears, white brisket / belly / udder region, white legs (the tan runs a little down
+    the outer forearm and thigh), white tail below a tan root.
+    Returns (M_or: 1 = tan, m_sw: tail switch mask, m_tuft: long-hair mask, hb: belly white height)."""
+    NZ = ctx.NZ
+    x, y, z = P[:, 0], P[:, 1], P[:, 2]
+    elbow, knee, hip, stifle, hock = ctx.elbow, ctx.knee, ctx.hip, ctx.stifle, ctx.hock
+    s, sn, sh = ctx.s, ctx.sn, ctx.sh
+    y_el = elbow[1]
+    # white belly: height above the bottom line, rising toward the udder / flank and the brisket
+    by = np.array([y_el - 0.25 * s, y_el - 0.10 * s, y_el + 0.15 * s, 0.5 * (y_el + hip[1]), stifle[1] - 0.10 * s,
+                   stifle[1], hip[1] + 0.12 * s])
+    bh = np.array([0.02, 0.16, 0.12, 0.16, 0.24, 0.20, 0.04]) * sh   # low behind the stifle: the rear bottom line rises to the escutcheon
+    hb = np.interp(yw, by, bh)
+    f_w = np.where(legF + legH < 0.5, hb - db, -1.0)       # > 0: white belly (trunk only; the legs have their own line)
+    # throat / dewlap / brisket underside white (GiM: white from the jaw down the throat to the chest)
+    m_neck_under = np.clip(w[:, 7] + torso * smoothstep(y_el + 0.02 * s, y_el - 0.12 * s, yw), 0, 1)
+    f_w = np.maximum(f_w, np.where(m_neck_under > 0.4, (-Nr[:, 2] - 0.35) * 0.1, -1.0))
+    # head white, ears tan (ear region = stage B Ear bones), the crown behind the horns blends into the tan neck
+    earm = smoothstep(0.25, 0.5, w[:, 10])
+    f_head = (headm - 0.5) * 0.1 - 0.2 * earm
+    f_head = f_head - 0.06 * smoothstep(ctx.poll[1] - 0.02, ctx.poll[1] + 0.05, y) * (z > ctx.poll[2] - 0.02)
+    f_w = np.maximum(f_w, f_head)
+    # legs: front white below mid-forearm (tan reaches lower on the outer front), hind white below the stifle
+    lat = np.sign(x) * Nr[:, 0]
+    zF = knee[2] + (0.45 - 0.25 * np.clip(lat, 0, 1)) * (elbow[2] - knee[2]) + 0.015 * NZ[8].noise(P * 22.0, 3)
+    f_w = np.maximum(f_w, np.where(legF > 0.3, (zF - zw) * 0.8, -1.0))
+    zH = stifle[2] - 0.03 - 0.06 * np.clip(-lat, 0, 1) + 0.015 * NZ[8].noise(P * 22.0, 4)
+    f_w = np.maximum(f_w, np.where(legH + 0.4 * w[:, 2] > 0.3, (zH - zw) * 0.8, -1.0))
+    # tail white below a tan root
+    s_tail, _, L_tail = polyline_param(P, ctx.tailpts)
+    s_tb = 0.16 + 0.03 * NZ[8].noise(P * 20.0, 5)
+    f_w = np.maximum(f_w, np.where(tailm > 0.3, (s_tail - s_tb) * L_tail, -1.0))
+    m_sw = tailm * smoothstep(0.66, 0.78, s_tail)          # switch (long clumped hair) for the height map
+    # irregular white body patches: domain-warped fBm, thresholded; the threshold drops over the back behind the
+    # withers, the loin and the rump (GiM: broad white saddle / rump patches) and rises on the neck and shoulder
+    Pw = P + 0.06 * np.stack([NZ[0].fbm(P, 1.7, 2), NZ[1].fbm(P, 1.7, 2), NZ[2].fbm(P, 1.7, 2)], 1)
+    n = NZ[9].fbm(Pw, 2.3, 4) + 0.35 * NZ[10].fbm(Pw, 6.0, 2)
+    back = smoothstep(0.30 * sh, 0.04 * sh, dt) * smoothstep(y_el + 0.05 * s, y_el + 0.25 * s, yw) * \
+        smoothstep(hip[1] + 0.02 * s, hip[1] - 0.22 * s, yw)                 # withers to loin, not the rump
+    rump = smoothstep(hip[1] - 0.20 * s, hip[1] + 0.05 * s, yw) * smoothstep(0.55 * sh, 0.15 * sh, dt)
+    flank = smoothstep(y_el + 0.35 * s, hip[1] - 0.1 * s, yw) * smoothstep(0.75 * sh, 0.45 * sh, dt)
+    shoulder = smoothstep(y_el + 0.22 * s, y_el + 0.02 * s, yw)
+    thr = 0.75 - 0.60 * back + 0.10 * rump - 0.15 * flank + 0.9 * shoulder + 1.2 * np.clip(w[:, 7] - 0.3, 0, 1)
+    f_patch = (n - thr) * 0.03
+    f_patch = np.where((torso + 0.6 * w[:, 7] + 0.8 * w[:, 2] + 0.5 * w[:, 0]) > 0.3, f_patch, -1.0)
+    # speckle islands along the patch borders (Simmental patches are ragged, with small white flecks)
+    fl = NZ[11].fbm(P, 16.0, 2)
+    f_patch = np.maximum(f_patch, np.where(np.abs(n - thr) < 0.35, (fl - 1.55) * 0.02, -1.0))
+    f_w = np.maximum(f_w, f_patch)
+    ew = 0.0045
+    M_or = smoothstep(-ew, ew, -(f_w + edge + 0.0018 * strand)).astype(np.float32)
+    return M_or, m_sw, np.zeros(len(P), np.float32), hb
 
 
 def _coat_chunk(ctx, P, Nr, part, w):
@@ -789,81 +870,88 @@ def _coat_chunk(ctx, P, Nr, part, w):
         strand[m] += wd[m] * v; clump[m] += wd[m] * c; wsum[m] += wd[m]
     strand /= np.maximum(wsum, 1e-3); clump /= np.maximum(wsum, 1e-3)
 
-    # ---------------------------------------------------------------- patch layout (signed metric fields)
-    # shoulder band (white): front / rear edge y as a function of depth below the top line
-    # (GiM: the neck-base orange runs unbroken into the shoulder and forearm; the band sits behind the arm)
-    dts = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.7]) * sh
-    sbF = y_el + np.array([-0.19 * sn + 0.08 * s, -0.005 * s, 0.06 * s, 0.11 * s, 0.085 * s, 0.06 * s])
-    sbR = y_el + np.array([0.155, 0.145, 0.13, 0.135, 0.13, 0.14]) * s
-    yF_sb = np.interp(dt, dts, sbF); yR_sb = np.interp(dt, dts, sbR)
-    # hip band (white)
-    dth = np.array([0.0, 0.1, 0.2, 0.3, 0.45]) * sh
-    hbF = hip[1] + np.array([-0.20, -0.14, -0.11, -0.10, -0.10]) * s
-    hbR = hip[1] + np.array([-0.085, -0.025, -0.005, 0.005, 0.0]) * s
-    yF_hb = np.interp(dt, dth, hbF); yR_hb = np.interp(dt, dth, hbR)
-    # white belly/brisket height above the bottom line, along y
-    by = np.array([y_el - 0.23 * s, y_el - 0.15 * s, y_el - 0.05 * s, y_el + 0.2 * s, 0.5 * (y_el + hip[1]),
-                   stifle[1] - 0.12 * s, stifle[1], hip[1] + 0.1 * s])
-    # (first value < 0: ahead of the chest the throat / neck underside stays orange)
-    bh = np.array([-0.06, 0.10, 0.10, 0.065, 0.055, 0.09, 0.17, 0.22]) * sh
-    hb = np.interp(yw, by, bh)
-    z_rb = stifle[2] + 0.075 * sh                  # lower limit of the orange rump
-    s_tail, _, L_tail = polyline_param(P, ctx.tailpts)
+    if AP.IS_COW:
+        M_or, m_sw, m_tuft, hb = _cow_layout(ctx, P, Nr, part, w, yw, zw, dt, db, edge, strand, legF, legH,
+                                             headm, tailm, torso)
+    else:
+        # ---------------------------------------------------------------- patch layout (signed metric fields)
+        # shoulder band (white): front / rear edge y as a function of depth below the top line
+        # (GiM: the neck-base orange runs unbroken into the shoulder and forearm; the band sits behind the arm)
+        dts = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.7]) * sh
+        sbF = y_el + np.array([-0.19 * sn + 0.08 * s, -0.005 * s, 0.06 * s, 0.11 * s, 0.085 * s, 0.06 * s])
+        sbR = y_el + np.array([0.155, 0.145, 0.13, 0.135, 0.13, 0.14]) * s
+        yF_sb = np.interp(dt, dts, sbF); yR_sb = np.interp(dt, dts, sbR)
+        # hip band (white)
+        dth = np.array([0.0, 0.1, 0.2, 0.3, 0.45]) * sh
+        hbF = hip[1] + np.array([-0.20, -0.14, -0.11, -0.10, -0.10]) * s
+        hbR = hip[1] + np.array([-0.085, -0.025, -0.005, 0.005, 0.0]) * s
+        yF_hb = np.interp(dt, dth, hbF); yR_hb = np.interp(dt, dth, hbR)
+        # white belly/brisket height above the bottom line, along y
+        by = np.array([y_el - 0.23 * s, y_el - 0.15 * s, y_el - 0.05 * s, y_el + 0.2 * s, 0.5 * (y_el + hip[1]),
+                       stifle[1] - 0.12 * s, stifle[1], hip[1] + 0.1 * s])
+        # (first value < 0: ahead of the chest the throat / neck underside stays orange)
+        bh = np.array([-0.06, 0.10, 0.10, 0.065, 0.055, 0.09, 0.17, 0.22]) * sh
+        hb = np.interp(yw, by, bh)
+        z_rb = stifle[2] + 0.075 * sh                  # lower limit of the orange rump
+        s_tail, _, L_tail = polyline_param(P, ctx.tailpts)
 
-    f1 = yw - yF_sb                                        # head / neck / shoulder / forearm orange
-    # white brisket + chest: ventral / front-facing chest only, so it does not cut across the point of the
-    # shoulder and elbow (the orange forearm stays connected to the shoulder, as on GiM)
-    lat_b = np.sign(x) * nx
-    brisk = (torso + legF > 0.5) & ((np.abs(x) < 0.07) | (lat_b < 0.45))
-    f1 = np.maximum(f1, np.where(brisk, hb - db, -1.0))
-    del lat_b, brisk
-    knee_edge = knee[2] + 0.012 + 0.012 * NZ[8].noise(P * 28.0, 3)
-    f1 = np.maximum(f1, knee_edge - zw)                    # white below the knees
-    f2 = np.maximum.reduce([yR_sb - yw, yw - yF_hb, hb - db])           # barrel
-    f2 = np.maximum(f2, (0.5 - torso) * 0.1)
-    f3 = np.maximum(yR_hb - yw, z_rb - zw)                 # rump (incl. the tail root)
-    s_tb = 0.64 + 0.03 * NZ[8].noise(P * 20.0, 4)    # white only on the lower ~40 % of the hanging tail + switch
-    m_sw = tailm * smoothstep(-0.03, 0.08, s_tail - s_tb)   # switch (long clumped hair) for the height map
-    f5 = np.maximum((0.5 - tailm) * 0.1, (s_tail - s_tb) * L_tail)     # orange tail base
-    f_tw = np.maximum((0.5 - tailm) * 0.1, (s_tb - s_tail) * L_tail)   # white rest of the tail (cut)
-    # forearms: fully orange on the right leg, lateral/front only on the left leg
-    lat = np.sign(x) * nx
-    fa_top = np.where(x > 0, knee[2] + 0.22 * (elbow[2] - knee[2]), knee_edge + 0.008)
-    f6 = np.maximum((0.5 - legF) * 0.1, fa_top - zw)
-    f6 = np.maximum(f6, np.where(x > 0, (-0.15 - (lat - 0.6 * ny)) * 0.05, -1.0))
-    # left outer thigh / stifle patch hanging down from the rump orange (asymmetry)
-    stL = np.array([stifle[0] + 0.05, stifle[1] + 0.075 * s, stifle[2] + 0.02])
-    f4 = (ell(P, stL, np.array([0.09, 0.075, 0.105]) * s) - 1.0) * 0.08
-    f4 = np.maximum(f4, 0.06 - x)
-    # a few small orange spots on the white hind legs (gaskin)
-    f7 = (2.15 - NZ[8].fbm(P, 14.0, 2)) * 0.015
-    f7 = np.maximum(f7, (0.5 - legH) * 0.1)
-    f7 = np.maximum(f7, np.maximum((hock[2] - 0.03) - zw, zw - (stifle[2] - 0.04)))
-    f_or = np.minimum.reduce([f1, f2, f3, f4, f5, f6, f7])
-    f_or = np.maximum(f_or, -f_tw)
-    del f1, f2, f3, f4, f5, f6, f7, f_tw, yF_sb, yR_sb, yF_hb, yR_hb, lat, fa_top, s_tail, s_tb
-    # forehead blaze (white) cut from the orange: jagged, tuft-like tapered capsule along the forehead
-    # midline, from the crown above the poll down to just above eye level
-    # GiM: a broad fluffy shield (~60 % of the forehead width) from the poll down to eye level
-    fA, fB = LM["forehead_A"], LM["forehead_B"]
-    fB = fB + (fB - fA) * 0.22
-    fA = fA + (fA - fB) * 0.18
-    tb, db_ = seg_param(P, fA, fB)
-    f_bl = db_ - np.interp(tb, [0.0, 0.2, 0.5, 1.0], [0.075, 0.095, 0.072, 0.03]) * sn
-    f_bl = f_bl + 0.7 * edge + 0.0055 * NZ[3].noise(aniso(P, fB - fA, 170.0, 40.0), 6)
-    m_tuft = smoothstep(0.004, -0.02, f_bl) * headm              # blaze core: longer, clumped hair (height map)
-    headish = np.maximum(headm, smoothstep(poll[1] + 0.08, poll[1] + 0.03, y) * (wh + wn > 0.8))
-    f_bl = np.maximum(f_bl, (0.5 - headish) * 0.1)
-    f_or = np.maximum(f_or, -f_bl)
-    del tb, db_, f_bl, headish
-    ew = 0.0055
-    M_or = smoothstep(ew, -ew, f_or + edge + 0.0018 * strand).astype(np.float32)
-    del f_or
+        f1 = yw - yF_sb                                        # head / neck / shoulder / forearm orange
+        # white brisket + chest: ventral / front-facing chest only, so it does not cut across the point of the
+        # shoulder and elbow (the orange forearm stays connected to the shoulder, as on GiM)
+        lat_b = np.sign(x) * nx
+        brisk = (torso + legF > 0.5) & ((np.abs(x) < 0.07) | (lat_b < 0.45))
+        f1 = np.maximum(f1, np.where(brisk, hb - db, -1.0))
+        del lat_b, brisk
+        knee_edge = knee[2] + 0.012 + 0.012 * NZ[8].noise(P * 28.0, 3)
+        f1 = np.maximum(f1, knee_edge - zw)                    # white below the knees
+        f2 = np.maximum.reduce([yR_sb - yw, yw - yF_hb, hb - db])           # barrel
+        f2 = np.maximum(f2, (0.5 - torso) * 0.1)
+        f3 = np.maximum(yR_hb - yw, z_rb - zw)                 # rump (incl. the tail root)
+        s_tb = 0.64 + 0.03 * NZ[8].noise(P * 20.0, 4)    # white only on the lower ~40 % of the hanging tail + switch
+        m_sw = tailm * smoothstep(-0.03, 0.08, s_tail - s_tb)   # switch (long clumped hair) for the height map
+        f5 = np.maximum((0.5 - tailm) * 0.1, (s_tail - s_tb) * L_tail)     # orange tail base
+        f_tw = np.maximum((0.5 - tailm) * 0.1, (s_tb - s_tail) * L_tail)   # white rest of the tail (cut)
+        # forearms: fully orange on the right leg, lateral/front only on the left leg
+        lat = np.sign(x) * nx
+        fa_top = np.where(x > 0, knee[2] + 0.22 * (elbow[2] - knee[2]), knee_edge + 0.008)
+        f6 = np.maximum((0.5 - legF) * 0.1, fa_top - zw)
+        f6 = np.maximum(f6, np.where(x > 0, (-0.15 - (lat - 0.6 * ny)) * 0.05, -1.0))
+        # left outer thigh / stifle patch hanging down from the rump orange (asymmetry)
+        stL = np.array([stifle[0] + 0.05, stifle[1] + 0.075 * s, stifle[2] + 0.02])
+        f4 = (ell(P, stL, np.array([0.09, 0.075, 0.105]) * s) - 1.0) * 0.08
+        f4 = np.maximum(f4, 0.06 - x)
+        # a few small orange spots on the white hind legs (gaskin)
+        f7 = (2.15 - NZ[8].fbm(P, 14.0, 2)) * 0.015
+        f7 = np.maximum(f7, (0.5 - legH) * 0.1)
+        f7 = np.maximum(f7, np.maximum((hock[2] - 0.03) - zw, zw - (stifle[2] - 0.04)))
+        f_or = np.minimum.reduce([f1, f2, f3, f4, f5, f6, f7])
+        f_or = np.maximum(f_or, -f_tw)
+        del f1, f2, f3, f4, f5, f6, f7, f_tw, yF_sb, yR_sb, yF_hb, yR_hb, lat, fa_top, s_tail, s_tb
+        # forehead blaze (white) cut from the orange: jagged, tuft-like tapered capsule along the forehead
+        # midline, from the crown above the poll down to just above eye level
+        # GiM: a broad fluffy shield (~60 % of the forehead width) from the poll down to eye level
+        fA, fB = LM["forehead_A"], LM["forehead_B"]
+        fB = fB + (fB - fA) * 0.22
+        fA = fA + (fA - fB) * 0.18
+        tb, db_ = seg_param(P, fA, fB)
+        f_bl = db_ - np.interp(tb, [0.0, 0.2, 0.5, 1.0], [0.075, 0.095, 0.072, 0.03]) * sn
+        f_bl = f_bl + 0.7 * edge + 0.0055 * NZ[3].noise(aniso(P, fB - fA, 170.0, 40.0), 6)
+        m_tuft = smoothstep(0.004, -0.02, f_bl) * headm              # blaze core: longer, clumped hair (height map)
+        headish = np.maximum(headm, smoothstep(poll[1] + 0.08, poll[1] + 0.03, y) * (wh + wn > 0.8))
+        f_bl = np.maximum(f_bl, (0.5 - headish) * 0.1)
+        f_or = np.maximum(f_or, -f_bl)
+        del tb, db_, f_bl, headish
+        ew = 0.0055
+        M_or = smoothstep(ew, -ew, f_or + edge + 0.0018 * strand).astype(np.float32)
+        del f_or
 
     # ---------------------------------------------------------------- colours
     # orange/white ratio matched to the Gemini GiM side view (was 203,112,45: too red, too little G/B)
     C_OR = srgb2lin([200, 122, 62]); C_OR_RED = srgb2lin([186, 102, 52]); C_OR_LT = srgb2lin([216, 150, 88])
     C_WH = srgb2lin([236, 232, 224]); C_WH_GREY = srgb2lin([214, 208, 202]); C_DIRT = srgb2lin([176, 165, 150])
+    if AP.IS_COW:    # GiM adult Simmental: paler, pinker red-tan; slightly cooler white
+        C_OR = srgb2lin([198, 136, 94]); C_OR_RED = srgb2lin([182, 116, 80]); C_OR_LT = srgb2lin([214, 160, 120])
+        C_WH = srgb2lin([238, 236, 232]); C_WH_GREY = srgb2lin([212, 208, 206]); C_DIRT = srgb2lin([168, 160, 150])
     lf1 = NZ[9].fbm(P, 3.0, 3); lf2 = NZ[10].fbm(P, 11.0, 2)
     hue = smoothstep(-1.2, 1.2, NZ[11].fbm(P, 1.6, 2))[:, None]
     orange = C_OR * (1 - hue) + C_OR_RED * hue
@@ -889,7 +977,7 @@ def _coat_chunk(ctx, P, Nr, part, w):
     # brisket speckles (grey-orange flecks in the white chest)
     m_br = smoothstep(y_el + 0.06 * s, y_el - 0.04 * s, yw) * np.clip(torso + 0.5 * legF, 0, 1) \
         * smoothstep(0.02, -0.01, db - hb) * smoothstep(elbow[2] - 0.12 * sh, elbow[2] - 0.04 * sh, z)
-    spk = smoothstep(0.9, 1.6, NZ[5].noise(aniso(P, [0, 0.3, -1], 70.0, 25.0), 7)) * m_br
+    spk = smoothstep(0.9, 1.6, NZ[5].noise(aniso(P, [0, 0.3, -1], 70.0, 25.0), 7)) * m_br * (0.0 if AP.IS_COW else 1.0)
     white = white * (1 - 0.55 * spk[:, None]) + srgb2lin([150, 104, 72]) * (0.55 * spk[:, None])
     col = orange * M_or[:, None] + white * (1 - M_or[:, None])
     del orange, white, m_wgrey, m_dirt, m_br, spk, yw, zw, dt, db, hb
@@ -978,13 +1066,13 @@ def _coat_chunk(ctx, P, Nr, part, w):
         Ph = P[hi]; zh = Ph[:, 2]
         ring = np.sin(2 * np.pi * (zh / 0.0035 + 0.6 * NZ[6].noise(Ph * 60.0, 8)))
         streak = NZ[6].noise(Ph * np.array([220.0, 220.0, 25.0]), 13)
-        hc = srgb2lin([158, 132, 110]) * (1.0 + 0.08 * NZ[6].fbm(Ph, 40.0, 2) + 0.03 * ring + 0.05 * streak)[:, None]
+        hc = srgb2lin([74, 70, 72] if AP.IS_COW else [158, 132, 110]) * (1.0 + 0.08 * NZ[6].fbm(Ph, 40.0, 2) + 0.03 * ring + 0.05 * streak)[:, None]
         dirt = smoothstep(0.03, 0.0, zh)
         hc = hc * (1 - 0.30 * dirt)[:, None] + srgb2lin([120, 100, 85]) * (0.18 * dirt)[:, None]
         cor = np.zeros(len(hi), np.float32)
         if len(ctx.hoof_rim):
             cor = smoothstep(0.0055, 0.0035, min_dist_to_set(Ph, ctx.hoof_rim)).astype(np.float32)
-        hc = hc * (1 - 0.8 * cor[:, None]) + srgb2lin([178, 158, 138]) * (0.8 * cor[:, None])
+        hc = hc * (1 - 0.8 * cor[:, None]) + srgb2lin([98, 92, 92] if AP.IS_COW else [178, 158, 138]) * (0.8 * cor[:, None])
         y_split = 0.5 * (elbow[1] + hip[1])
         cx = np.zeros(len(hi))
         for (sx, fr), v in ctx.hoof_cx.items():
@@ -999,7 +1087,7 @@ def _coat_chunk(ctx, P, Nr, part, w):
     if len(ni):
         Pn = P[ni]
         peb = np.clip(1.0 - np.abs(NZ[7].noise(Pn * 330.0, 9)), 0, 1) ** 1.5   # pebbled plates + grooves
-        nc = srgb2lin([226, 186, 162]) * (0.95 + 0.05 * peb + 0.03 * NZ[7].noise(Pn * 60.0, 12))[:, None]
+        nc = srgb2lin([204, 166, 160] if AP.IS_COW else [226, 186, 162]) * (0.95 + 0.05 * peb + 0.03 * NZ[7].noise(Pn * 60.0, 12))[:, None]
         nc_c = LM["nose_c"]; nmin, nmax = LM["nose_min"], LM["nose_max"]
         nrad = 0.5 * (nmax - nmin)
         nost = np.zeros(len(ni), np.float32); nin = np.zeros(len(ni), np.float32)
@@ -1018,6 +1106,38 @@ def _coat_chunk(ctx, P, Nr, part, w):
         col[ni] = nc
         rough[ni] = 0.50 - 0.06 * peb - 0.12 * nost
         height[ni] = 0.42 + 0.28 * peb * (1 - nin) - 0.3 * nin
+    # ---------------------------------------------------------------- cow only: horns (5) and udder + teats (6)
+    hi = np.flatnonzero(part == AP.PART_HORN)
+    if len(hi) and ctx.horn:
+        Ph = P[hi]; t = np.zeros(len(hi))
+        for sx, (hb_, ht_) in ctx.horn.items():
+            m = np.sign(Ph[:, 0]) == sx
+            ax = ht_ - hb_; t[m] = np.clip(((Ph[m] - hb_) @ ax) / max(float(ax @ ax), 1e-9), 0, 1)
+        ring = np.sin(2 * np.pi * (t * 9.0 + 0.3 * NZ[6].noise(Ph * 80.0, 15)))
+        streak = NZ[6].noise(Ph * np.array([160.0, 160.0, 160.0]), 16)
+        hcol = srgb2lin([228, 212, 176]) * (1 - smoothstep(0.35, 0.8, t))[:, None] + \
+            srgb2lin([204, 176, 132]) * smoothstep(0.35, 0.8, t)[:, None]
+        tip = smoothstep(0.72, 0.97, t)[:, None]
+        hcol = hcol * (1 - tip) + srgb2lin([84, 72, 62]) * tip
+        hcol = hcol * (1 + 0.04 * streak + 0.03 * ring * (1 - smoothstep(0.3, 0.5, t)))[:, None]
+        col[hi] = hcol
+        rough[hi] = 0.42 + 0.06 * streak - 0.08 * tip[:, 0]
+        height[hi] = 0.5 + 0.08 * ring * (1 - smoothstep(0.3, 0.5, t)) + 0.03 * streak
+    ui = np.flatnonzero(part == AP.PART_UDDER)
+    if len(ui):
+        Pu = P[ui]
+        teat = smoothstep(ctx.teat_z + 0.004, ctx.teat_z - 0.004, Pu[:, 2])
+        tipm = smoothstep(ctx.udder_zmin + 0.012, ctx.udder_zmin + 0.002, Pu[:, 2])
+        mot = NZ[7].fbm(Pu, 30.0, 2); vein = smoothstep(0.75, 0.95, 1 - np.abs(NZ[6].noise(Pu * np.array([25.0, 12.0, 40.0]), 17)))
+        ucol = srgb2lin([226, 186, 176]) * (1 + 0.05 * mot)[:, None]
+        ucol = ucol * (1 - 0.25 * vein[:, None]) + srgb2lin([196, 150, 150]) * (0.25 * vein[:, None])
+        ucol = ucol * (1 - teat[:, None]) + srgb2lin([216, 152, 142]) * teat[:, None]
+        ucol = ucol * (1 - 0.6 * tipm[:, None]) + srgb2lin([170, 110, 104]) * (0.6 * tipm[:, None])
+        # the udder top is haired like the belly it grows from: blend back to the coat colour near the body
+        haired = smoothstep(ctx.udder_top - 0.05, ctx.udder_top - 0.01, Pu[:, 2])[:, None]
+        col[ui] = ucol * (1 - haired) + col[ui] * haired
+        rough[ui] = 0.58 + 0.04 * mot - 0.08 * teat
+        height[ui] = 0.5 + 0.03 * mot - 0.04 * vein + haired[:, 0] * (height[ui] - 0.5)
     return np.clip(col, 0, 1), np.clip(rough, 0.02, 1), np.clip(height, 0, 1)
 
 
@@ -1148,10 +1268,10 @@ def build_materials(tex):
         t.location = loc; t.label = label
         ln.new(uv.outputs[0], t.inputs["Vector"])
         return t
-    bc = tnode("T_Calf_BaseColor", False, (-400, 300), "BaseColor (sRGB)")
-    ro = tnode("T_Calf_Roughness", True, (-400, 0), "Roughness")
-    nm = tnode("T_Calf_Normal", True, (-400, -300), "Normal (tangent, OpenGL +Y)")
-    ao = tnode("T_Calf_AO", True, (-400, -600), "AO (engine occlusion slot; not used by Principled)")
+    bc = tnode(TEX + "_BaseColor", False, (-400, 300), "BaseColor (sRGB)")
+    ro = tnode(TEX + "_Roughness", True, (-400, 0), "Roughness")
+    nm = tnode(TEX + "_Normal", True, (-400, -300), "Normal (tangent, OpenGL +Y)")
+    ao = tnode(TEX + "_AO", True, (-400, -600), "AO (engine occlusion slot; not used by Principled)")
     nmap = nd.new("ShaderNodeNormalMap"); nmap.space = "TANGENT"; nmap.uv_map = "UVMap"; nmap.location = (-50, -300)
     ln.new(bc.outputs["Color"], bs.inputs["Base Color"])
     ln.new(ro.outputs["Color"], bs.inputs["Roughness"])
@@ -1164,7 +1284,7 @@ def build_materials(tex):
     out = nd.new("ShaderNodeOutputMaterial"); out.location = (600, 0)
     bs = nd.new("ShaderNodeBsdfPrincipled"); bs.location = (250, 0)
     uv = nd.new("ShaderNodeUVMap"); uv.uv_map = "UVMap"; uv.location = (-700, 0)
-    t = nd.new("ShaderNodeTexImage"); t.image = load_image(tex["T_CalfEye_BaseColor"], "T_CalfEye_BaseColor", False)
+    t = nd.new("ShaderNodeTexImage"); t.image = load_image(tex[TEX_EYE + "_BaseColor"], TEX_EYE + "_BaseColor", False)
     t.location = (-400, 0); t.label = "Eye BaseColor (sRGB)"
     ln.new(uv.outputs[0], t.inputs["Vector"])
     ln.new(t.outputs["Color"], bs.inputs["Base Color"])
@@ -1266,23 +1386,23 @@ def main(argv):
         return p
 
     base = to_img(lin2srgb(col).astype(np.float32), 3)
-    save_png(out_path("T_Calf_BaseColor"), base)
+    save_png(out_path(TEX + "_BaseColor"), base)
     rough_img = to_img(rough, 1)[..., 0]
-    save_png(out_path("T_Calf_Roughness"), rough_img)
+    save_png(out_path(TEX + "_Roughness"), rough_img)
     height_img = to_img(height, 1)[..., 0]
-    save_png(out_path("T_Calf_Height"), height_img, bits=16)
+    save_png(out_path(TEX + "_Height"), height_img, bits=16)
     ao_lo, ao_cov = D["ao_lo"], D["ao_lo_cov"].astype(bool)
     ao_lo = blur_masked(ao_lo, ao_cov, 0.8)
     ao_lo = fill_background(ao_lo[..., None], ao_cov)[..., 0]
     ao_up = cv2.resize(ao_lo, (R, R), interpolation=cv2.INTER_LINEAR)
     ao_img = fill_background(np.clip(ao_up, 0, 1)[..., None], cov, near)[..., 0]
-    save_png(out_path("T_Calf_AO"), ao_img)
+    save_png(out_path(TEX + "_AO"), ao_img)
     smooth = 1.0 - rough_img
     zero = np.zeros_like(smooth)
-    save_png(out_path("T_Calf_MaskMap"), np.stack([zero, ao_img, np.ones_like(smooth), smooth], -1))
-    save_png(out_path("T_Calf_MetallicSmoothness"), np.stack([zero, zero, zero, smooth], -1))
+    save_png(out_path(TEX + "_MaskMap"), np.stack([zero, ao_img, np.ones_like(smooth), smooth], -1))
+    save_png(out_path(TEX + "_MetallicSmoothness"), np.stack([zero, zero, zero, smooth], -1))
     eye = eye_texture(a.eye_res, a.seed)
-    save_png(out_path("T_CalfEye_BaseColor"), eye)
+    save_png(out_path(TEX_EYE + "_BaseColor"), eye)
     log("wrote colour/roughness/AO/mask/eye textures")
     if a.textures_only:
         return a, LM, D
@@ -1298,7 +1418,7 @@ def main(argv):
     n /= np.maximum(np.linalg.norm(n, axis=-1, keepdims=True), 1e-6)
     n = n * 0.5 + 0.5
     n = fill_background(n.astype(np.float32), cov, near)
-    save_png(out_path("T_Calf_Normal"), n)
+    save_png(out_path(TEX + "_Normal"), n)
     nc = n[cov]
     log("normal map mean RGB (0-255):", np.round(nc.mean(0) * 255, 1).tolist(),
         "std:", np.round(nc.std(0) * 255, 1).tolist(), "bump distance %.5f m" % dist)
@@ -1313,7 +1433,7 @@ def main(argv):
     os.makedirs(os.path.dirname(out), exist_ok=True)
     if a.pack:
         for im in bpy.data.images:
-            if im.name.startswith("T_Calf"):
+            if im.name.startswith(TEX):
                 im.pack()
     bpy.ops.wm.save_as_mainfile(filepath=out)
     if not a.pack:

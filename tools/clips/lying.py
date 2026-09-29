@@ -54,6 +54,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)
 sys.path.insert(0, TOOLS)
 import anim_lib as A
+import asset_profile as AP
 from anim_lib import Pose, LEGS
 
 FRONT = ("LF", "RF")
@@ -621,7 +622,7 @@ def rock_back(calf):
     P.head = Vector((12.0, 0.0, 0.0))
     solve_body(calf, P, [shell_res(calf, "RF", D_STAND)], ["z"])
     K = knee_points(calf)["LF"]
-    set_foot(calf, P, "LF", Vector((K.x, -0.29, 0.13)))
+    set_foot(calf, P, "LF", Vector((K.x, -0.29 + RIG_DY["F"], 0.13)))
     P.flex["LF"] = 75.0
     return P
 
@@ -1163,8 +1164,33 @@ def pop_qa(calf, act, frames, loop=False, label="", body_only=False):
 CLIPS = {}      # name -> (frames, fn, loop, info); filled by build()
 
 
+# Absolute hoof positions above (TOE_Y / HEEL_Y, LY_FEET, GATHER, the rock_back lift) were placed on the calf rig
+# (rest fetlocks: fore y -0.3403, hind y 0.4311, hind x 0.1154). The adult cow's authoring rig has the same height but
+# a longer trunk (fore fetlocks 9 cm further forward, hind 11 cm further back): shift them with the rig's own
+# fetlocks. The calf is left untouched (offsets 0, constants unchanged).
+CALF_FEET = {"F": (0.1238, -0.3403), "H": (0.1154, 0.4311)}
+RIG_DY = {"F": 0.0, "H": 0.0}
+
+
+def adapt_to_rig(calf):
+    if not AP.IS_COW or RIG_DY.get("_done"):
+        return
+    for k, foot in (("F", "IKFrontLeg.L"), ("H", "IKBackLeg.L")):
+        r = calf.rest_head(foot)
+        dx, dy = r.x - CALF_FEET[k][0], r.y - CALF_FEET[k][1]
+        RIG_DY[k] = dy
+        TOE_Y[k] += dy; HEEL_Y[k] += dy
+        if k == "H":
+            for d in (LY_FEET, GATHER):
+                for leg, (x, y) in list(d.items()):
+                    d[leg] = (x + (dx if x > 0.05 else -dx if x < -0.05 else 0.0), y + dy)
+    RIG_DY["_done"] = True
+    print("lying: rig offsets vs the calf: fore dy %+.3f m, hind dy %+.3f m" % (RIG_DY["F"], RIG_DY["H"]))
+
+
 def build(calf):
     made = []
+    adapt_to_rig(calf)
     _CACHE.clear()
     for name, maker, loop in (("LieDown", lie_down, False), ("Lying_Idle", lying_idle, True), ("GetUp", get_up, False)):
         N, fn, info = maker(calf)

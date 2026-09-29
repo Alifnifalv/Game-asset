@@ -80,6 +80,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Quaternion, Vector
 import anim_lib as A
+import asset_profile as AP
 from anim_lib import Pose, LEGS
 
 FPS = 30
@@ -421,6 +422,16 @@ DEAD = dict(
 )
 
 
+# adult cow: horns. With the calf's cheek-on-the-ground head the lower (right) horn digs ~10 cm into the ground; the
+# cow's dead head rests on that horn and its cheek instead (less neck bend toward the ground, head rolled nose-down).
+# the head whips down onto the ground after the trunk (IMP + 3) and bounces (IMP + 7)
+D_HIT = dict(neck_yaw3=[-4.7, -5.7, -5.7], neck_yaw7=[-3.3, -3.8, -3.8], head3=[9.0, -5.0, 5.0], head7=[6.0, -2.0, 5.0])
+if AP.IS_COW:
+    DEAD.update(neck_yaw=[1.0, 0.8, 0.8], head=V(8.0, -4.0, 1.0))
+    D_HIT = dict(neck_yaw3=[-0.5, -0.5, -0.5], neck_yaw7=[-0.5, -0.5, -0.5], head3=[9.0, -5.0, 0.0],
+                 head7=[6.0, -2.0, 0.0])
+
+
 def _vkeys(keys):
     return VCurve([(f, list(v)) for f, v in keys])
 
@@ -525,10 +536,10 @@ class DeathModel:
                             (24, [-3.0, -5.0, -6.0]), (IMP - 1, [-4.0, -6.0, -7.0]), (IMP + 3, [9.0, 9.0, 7.0]),
                             (IMP + 7, [6.0, 6.0, 5.0]), (IMP + 13, DEAD["neck"]), (H, DEAD["neck"])])
         C["neck_yaw"] = _vkeys([(0, [0.0, 0.0, 0.0]), (8, [1.0, 1.5, 2.0]), (22, [2.0, 3.0, 3.0]),
-                                (IMP - 1, [1.0, 1.0, 0.0]), (IMP + 3, [-4.7, -5.7, -5.7]), (IMP + 7, [-3.3, -3.8, -3.8]),
+                                (IMP - 1, [1.0, 1.0, 0.0]), (IMP + 3, D_HIT["neck_yaw3"]), (IMP + 7, D_HIT["neck_yaw7"]),
                                 (IMP + 13, DEAD["neck_yaw"]), (H, DEAD["neck_yaw"])])
         C["head"] = _vkeys([(0, [0.0, 0.0, 0.0]), (3, [-6.0, 0.0, 0.0]), (8, [4.0, 2.0, -3.0]), (13, [2.0, 3.0, -4.0]),
-                            (IMP - 5, [-4.0, 0.0, 0.0]), (IMP + 3, [9.0, -5.0, 5.0]), (IMP + 7, [6.0, -2.0, 5.0]),
+                            (IMP - 5, [-4.0, 0.0, 0.0]), (IMP + 3, D_HIT["head3"]), (IMP + 7, D_HIT["head7"]),
                             (IMP + 13, list(DEAD["head"])), (H, list(DEAD["head"]))])
         C["jaw"] = Curve([(0, 0.0), (3, 7.0), (8, 3.0), (13, 4.0), (IMP - 2, 2.0), (IMP + 3, 9.0), (IMP + 10, DEAD["jaw"]),
                           (H, DEAD["jaw"])])
@@ -797,6 +808,11 @@ def death_fn(calf):
 # from the lying orientation to follow their cannon (like Death's limp hooves). Root: moves under the carcass
 # (DL_ROOT_END), as Death.
 DL_N = 60
+# the head hits the ground after the body (b + 2) and bounces (b + 6); the cow's horn needs a lighter whip (see D_HIT)
+DL_HIT = dict(neck_yaw2=[-3.5, -4.5, -4.5], neck_yaw6=[-3.3, -3.8, -3.8], head2=[10.0, -5.0, 5.0], head6=[7.0, -2.0, 5.0])
+if AP.IS_COW:
+    DL_HIT = dict(neck_yaw2=[-0.5, -0.5, -0.5], neck_yaw6=[-0.5, -0.5, -0.5], head2=[10.0, -5.0, 0.0],
+                  head6=[7.0, -2.0, 0.0])
 DL_HOLD = 50                          # final pose held exactly f50-60
 DL_ROOT_END = V(-0.17, 0.38, 0.0)     # root at the end (armature space; the lying body is 0.40 m behind the root)
 DL_ROLL = (16, 31)                    # the roll accelerates from an 8 deg lean (f16) to the side impact (f31, 88 deg)
@@ -860,10 +876,10 @@ class DeathLyingModel:
                             (26, [0.0, 1.0, 0.0]), (b + 2, [10.0, 10.0, 8.0]), (b + 6, [7.0, 7.0, 5.0]),
                             (b + 12, list(end.neck)), (DL_HOLD, list(end.neck))])
         C["neck_yaw"] = VCurve([(0, list(ly.neck_yaw)), (16, [2.0, 2.0, 2.0]), (b, [0.0, 0.0, 0.0]),
-                                (b + 2, [-3.5, -4.5, -4.5]), (b + 6, [-3.3, -3.8, -3.8]),
+                                (b + 2, DL_HIT["neck_yaw2"]), (b + 6, DL_HIT["neck_yaw6"]),
                                 (b + 12, list(end.neck_yaw)), (DL_HOLD, list(end.neck_yaw))])
         C["head"] = VCurve([(0, list(ly.head)), (4, [-2.0, 4.0, -4.0]), (9, [7.0, 4.0, -4.0]), (16, [9.0, 2.0, -2.0]),
-                            (26, [4.0, 0.0, 0.0]), (b + 2, [10.0, -5.0, 5.0]), (b + 6, [7.0, -2.0, 5.0]),
+                            (26, [4.0, 0.0, 0.0]), (b + 2, DL_HIT["head2"]), (b + 6, DL_HIT["head6"]),
                             (b + 12, list(end.head)), (DL_HOLD, list(end.head))])
         C["jaw"] = Curve([(0, ly.jaw), (4, 10.0), (10, 4.0), (b - 2, 3.0), (b + 2, 9.0), (b + 9, end.jaw), (DL_HOLD, end.jaw)])
         C["earL"] = VCurve([(0, list(ly.ears["L"])), (4, [-30.0, -5.0, 6.0]), (16, [-20.0, 20.0, 0.0]),

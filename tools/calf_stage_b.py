@@ -9,15 +9,23 @@ Objects out:
   Calf_LOD1        subdiv-1 skinned mesh (same UVs)
   Calf_LOD2        cage skinned mesh (same UVs)
 Face attribute "orig_part": 0 coat, 1 light coat (face/socks/inner ear/tail tip/belly patch),
-                             2 hooves, 3 nose/muzzle, 4 eyeball
+                             2 hooves, 3 nose/muzzle, 4 eyeball; cow only: 5 horn, 6 udder + teats
+
+Adult cow profile (ASSET=cow, tools/asset_profile.py): P_COW replaces the calf reshape (adult proportions: no torso
+compression, no head/muzzle change, no flank tuck, no forehead tuft), the horns are kept out of the ear edits and
+slightly shortened, and a modelled udder with four teats (closed islands, rigid on the rear trunk) replaces the source's
+18-vertex bump. Everything is built at the same AUTHORING scale as the calf (meters 0.225); stage E scales the cow up.
 """
 import bpy, bmesh, math, os, sys
 from mathutils import Vector, Matrix
 from mathutils.geometry import intersect_point_line
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import asset_profile as AP
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "build", "stage_a.blend")
-OUT = os.path.join(ROOT, "build", "stage_b.blend")
+SRC = os.path.join(AP.BUILD, "stage_a.blend")
+OUT = os.path.join(AP.BUILD, "stage_b.blend")
 if __name__ == "__main__":      # optional --in/--out (defaults = the build pipeline paths)
     import argparse
     _ap = argparse.ArgumentParser(description="calf stage B")
@@ -47,11 +55,30 @@ P = dict(                # all in ORIGINAL model units (1 unit ~= 22.5 cm after 
     jaw_hinge=(-4.0, 3.15), jaw_front=(-5.05, 2.95), jaw_soft=0.09,   # (y, z) mouth line, original units
     ear_root_x=0.52, ear_soft=0.13,
 )
+# adult cow (Simmental, GiM "Cow" adult female): the source already has adult proportions, so only the local detail
+# edits stay (legs a little finer than the low-poly source, a dewlap, larger leaf ears, tail switch); same authoring
+# scale as the calf (withers ~1.0 m), stage E scales it to ~1.42 m
+P_COW = dict(P, x_scale=1.0, torso_compress=1.0, head_scale=1.0, muzzle_compress=1.0, head_widen=1.0,
+             flank_lift=-0.12,         # negative: a deeper, rounder adult barrel (the calf tucks its flank up)
+             ear_scale=1.15, ear_flat=0.3, ear_cup=0.07,
+             leg_thin={"FrontUpperLeg": 0.95, "FrontLowerLeg": 0.90, "BackUpperLeg": 0.92,
+                       "BackLowerLeg": 0.88, "IKFrontLeg": 0.92, "IKBackLeg": 0.92,
+                       "FF": 0.95, "FFB": 0.95, "BackLeg": 0.97},
+             tail_switch=1.7, neck_deepen=1.16, eye_radius_mul=1.05, eye_protrude=0.22, eye_open=0.9,
+             tuft_height=0.0,
+             horn_scale=0.82,          # the source horns span 0.73 m (final scale); GiM's are shorter
+             # udder (original units; 1 unit = 0.32 m on the final cow): ellipsoid radii, centre, pitch (deg, + = rear up)
+             udder_r=(0.47, 0.60, 0.40), udder_c=(0.0, 0.95, 1.92), udder_pitch=-12.0,
+             teat_xy=(0.21, 0.29), teat_len=0.20, teat_r=0.048)
+if AP.IS_COW:
+    P = P_COW
 
 bpy.ops.wm.open_mainfile(filepath=SRC)
 arm = bpy.data.objects["CalfRig"]
 ob = bpy.data.objects["Calf"]
 me = ob.data
+_pa = me.attributes["orig_part"].data
+HORN_V = {vi for pl in me.polygons if _pa[pl.index].value == AP.PART_HORN for vi in pl.vertices}   # empty on the calf
 
 def smoothstep(e0, e1, x):
     t = min(1.0, max(0.0, (x - e0) / (e1 - e0)))
@@ -65,6 +92,7 @@ def add_region_group(name, fn):
     vg = ob.vertex_groups.new(name=name)
     head_i = ob.vertex_groups["Head"].index
     for v in me.vertices:
+        if v.index in HORN_V: continue     # cow: the horns overlap the ear box
         w = fn(v.co)
         if w <= 1e-3: continue
         if next((g.weight for g in v.groups if g.group == head_i), 0.0) <= 1e-3:
@@ -123,6 +151,68 @@ for f in res["faces"]:
 # poke the n-gon so the patch subdivides smoothly
 bmesh.ops.poke(bm, faces=res["faces"])
 bm.to_mesh(me); bm.free()
+
+# cow: modelled udder (a tilted ellipsoid with a median groove, its top buried in the belly) and four teats, as
+# closed islands tagged PART_UDDER. Skinned rigidly to the rear trunk: copy the trunk-bone weights of the nearest
+# belly vertex (the hind-leg bones are left out, so the udder does not shear when the thighs swing).
+def add_udder():
+    import numpy as _np
+    cu = Vector(P["udder_c"]); r = Vector(P["udder_r"])
+    R = Matrix.Rotation(math.radians(P["udder_pitch"]), 3, "X")
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=16, v_segments=10, radius=1.0)
+    for v in bm.verts:
+        q = v.co.copy()
+        groove = 0.10 * math.exp(-(q.x / 0.18) ** 2) * max(0.0, -q.z)      # median suspensory groove underneath
+        q = Vector((q.x * r.x, q.y * r.y, (q.z + groove) * r.z))
+        v.co = cu + R @ q
+    bottom = {}
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            tx, ty = sx * P["teat_xy"][0], P["udder_c"][1] + sy * P["teat_xy"][1]
+            # base on the udder's lower surface at (tx, ty)
+            d = Vector((tx, ty, 0.0)) - cu
+            ql = R.transposed() @ Vector((d.x, d.y, 0.0))
+            u2 = (ql.x / r.x) ** 2 + (ql.y / r.y) ** 2
+            zb = cu.z - r.z * math.sqrt(max(0.05, 1.0 - u2)) + 0.03
+            ax = Vector((sx * 0.12, sy * 0.10, -1.0)).normalized()
+            # cone along local Z: radius1 at -Z (the tip, local -Z is mapped onto the teat axis), radius2 at the base
+            res_ = bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=8, radius1=P["teat_r"] * 0.78,
+                                         radius2=P["teat_r"], depth=P["teat_len"])
+            rot = ax.to_track_quat("-Z", "Y").to_matrix()
+            base = Vector((tx, ty, zb))
+            for v in res_["verts"]:
+                v.co = base + rot @ (v.co - Vector((0, 0, P["teat_len"] / 2)))
+            bottom[(sx, sy)] = base + ax * P["teat_len"]
+    nv0 = len(me.vertices)
+    tmp = bpy.data.meshes.new("udder"); bm.to_mesh(tmp); bm.free()
+    # append the island to the body mesh through a temporary object join (keeps attributes/UV layers consistent)
+    uo = bpy.data.objects.new("udder", tmp); bpy.context.scene.collection.objects.link(uo)
+    tmp.attributes.new("orig_part", "INT", "FACE")
+    for i in range(len(tmp.polygons)): tmp.attributes["orig_part"].data[i].value = AP.PART_UDDER
+    for p_ in tmp.polygons: p_.use_smooth = True
+    trunk = {"Body", "Back", "Torso", "Torso2", "Torso3"}
+    gi = {g.name: g.index for g in ob.vertex_groups}
+    body_co = _np.array([v.co[:] for v in me.vertices])
+    cand = _np.flatnonzero((body_co[:, 2] > 1.75) & (_np.abs(body_co[:, 0]) < 0.9) & (body_co[:, 1] > -0.4) & (body_co[:, 1] < 2.0))
+    names = {g.index: g.name for g in ob.vertex_groups}
+    for n in trunk: uo.vertex_groups.new(name=n)
+    for v in tmp.vertices:
+        j = cand[_np.argmin(_np.linalg.norm(body_co[cand] - _np.array(v.co[:]), axis=1))]
+        ws = {names[g.group]: g.weight for g in me.vertices[j].groups if names[g.group] in trunk and g.weight > 1e-4}
+        if not ws: ws = {"Body": 1.0}
+        t = sum(ws.values())
+        for n, w in ws.items(): uo.vertex_groups[n].add([v.index], w / t, "REPLACE")
+    bpy.ops.object.select_all(action="DESELECT")
+    uo.select_set(True); ob.select_set(True); bpy.context.view_layer.objects.active = ob
+    bpy.ops.object.join()
+    print("udder: %d verts added (teat tips z %s)" % (len(me.vertices) - nv0,
+          sorted(round(b.z, 3) for b in bottom.values())))
+if AP.IS_COW:
+    add_udder()
+    # join re-indexes nothing before nv0, but recompute the horn set from the faces to be safe
+    _pa = me.attributes["orig_part"].data
+    HORN_V = {vi for pl in me.polygons if _pa[pl.index].value == AP.PART_HORN for vi in pl.vertices}
 
 # eye socket loops (remaining boundaries)
 def boundary_loops(mesh):
@@ -202,7 +292,7 @@ for v in me.vertices:
 # ears: vertices lateral of the skull near ear height
 for i, c in enumerate(cos):
     ax = abs(c.x)
-    if ax > 0.5 and -4.05 < c.y < -3.55 and 3.75 < c.z < 4.35:
+    if ax > 0.5 and -4.05 < c.y < -3.55 and 3.75 < c.z < 4.35 and i not in HORN_V:
         root = Vector((math.copysign(0.52, c.x), -3.82, 4.05))
         w = smoothstep(0.5, 0.62, ax)
         # ear root follows the head scale, so scale relative to the (already head-scaled) root
@@ -221,7 +311,7 @@ if P["ear_flat"] != 1.0 or P["ear_cup"]:
     _inner = {vi for pl in me.polygons if _part[pl.index].value == 1 for vi in pl.vertices}
     for side in (1, -1):
         ids = [i for i, c in enumerate(cos) if c.x * side > 0 and -4.15 < c.y < -3.45 and 3.65 < c.z < 4.45
-               and abs(c.x) > P["ear_root_x"]]
+               and abs(c.x) > P["ear_root_x"] and i not in HORN_V]
         if len(ids) < 10: continue
         wts = _np.array([smoothstep(P["ear_root_x"], P["ear_root_x"] + P["ear_soft"], abs(cos[i].x)) for i in ids])
         X = _np.array([new[i][:] for i in ids])
@@ -286,6 +376,16 @@ if P["tuft_height"]:
         new[v.index] = new[v.index] + v.normal * (P["tuft_height"] * b * min(1.0, wh / 0.8))
         n_tf += 1
     print("forehead tuft: %d verts raised (max %.3f units)" % (n_tf, P["tuft_height"]))
+
+# cow: shorter horns (scaled about each horn's base, the head-side end of the island)
+if HORN_V and P.get("horn_scale", 1.0) != 1.0:
+    for side in (1, -1):
+        hv = [i for i in HORN_V if cos[i].x * side > 0]
+        base_ = sorted(hv, key=lambda i: abs(cos[i].x))[: max(4, len(hv) // 8)]
+        root_h = sum((new[i] for i in base_), Vector()) / len(base_)
+        for i in hv:
+            new[i] = root_h + (new[i] - root_h) * P["horn_scale"]
+    print("horns: scaled x%.2f about their bases (%d verts)" % (P["horn_scale"], len(HORN_V)))
 
 for v in me.vertices:
     v.co = new[v.index]

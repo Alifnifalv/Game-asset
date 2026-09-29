@@ -1,0 +1,548 @@
+{
+ "source": "/home/user/Game-asset/build/cow/stage_e.blend",
+ "source_mtime": "2026-09-29T07:23:24",
+ "exported": "2026-09-29T07:23:24",
+ "blender": "5.0.1",
+ "files": {
+  "Cow.glb": 16549624,
+  "Cow.fbx": 15023484,
+  "Textures/T_CowEye_BaseColor.png": 356468,
+  "Textures/T_Cow_AO.png": 1697536,
+  "Textures/T_Cow_BaseColor.png": 8511927,
+  "Textures/T_Cow_MaskMap.png": 7616300,
+  "Textures/T_Cow_MetallicSmoothness.png": 5978959,
+  "Textures/T_Cow_Normal.png": 18603690,
+  "Textures/T_Cow_Roughness.png": 3920688
+ },
+ "glb": {
+  "objects": [
+   "CowRig",
+   "Cow_LOD0"
+  ],
+  "textures_wired": [],
+  "texture_max_res": 2048,
+  "textures_reduced": [
+   {
+    "image": "T_Cow_BaseColor",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   },
+   {
+    "image": "T_Cow_Roughness",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   },
+   {
+    "image": "T_Cow_Normal",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   },
+   {
+    "image": "T_Cow_AO",
+    "from": [
+     4096,
+     4096
+    ],
+    "to": [
+     2048,
+     2048
+    ]
+   }
+  ],
+  "double_sided": false
+ },
+ "armature": "CowRig",
+ "fps": 30.0,
+ "bones": [
+  "Root",
+  "Body",
+  "Back",
+  "Torso",
+  "Torso2",
+  "Torso3",
+  "Neck1",
+  "Neck2",
+  "Neck3",
+  "Head",
+  "Jaw",
+  "Ear.L",
+  "Ear.R",
+  "FrontShoulder.L",
+  "FrontUpperLeg.L",
+  "FrontLowerLeg.L",
+  "IKFrontLeg.L",
+  "FF.L",
+  "FrontShoulder.R",
+  "FrontUpperLeg.R",
+  "FrontLowerLeg.R",
+  "IKFrontLeg.R",
+  "FF.R",
+  "BackShoulder.L",
+  "BackLeg.L",
+  "BackUpperLeg.L",
+  "BackLowerLeg.L",
+  "IKBackLeg.L",
+  "FFB.L",
+  "BackShoulder.R",
+  "BackLeg.R",
+  "BackUpperLeg.R",
+  "BackLowerLeg.R",
+  "IKBackLeg.R",
+  "FFB.R",
+  "Tail1",
+  "Tail2",
+  "Tail3",
+  "Tail4",
+  "Tail5",
+  "Tail6",
+  "Tail7"
+ ],
+ "bones_source": [
+  "Root",
+  "Body",
+  "Back",
+  "Torso",
+  "Torso2",
+  "Torso3",
+  "Neck1",
+  "Neck2",
+  "Neck3",
+  "Head",
+  "Jaw",
+  "Ear.L",
+  "Ear.R",
+  "FrontShoulder.L",
+  "FrontUpperLeg.L",
+  "FrontLowerLeg.L",
+  "IKFrontLeg.L",
+  "FF.L",
+  "FrontShoulder.R",
+  "FrontUpperLeg.R",
+  "FrontLowerLeg.R",
+  "IKFrontLeg.R",
+  "FF.R",
+  "BackShoulder.L",
+  "BackLeg.L",
+  "BackUpperLeg.L",
+  "BackLowerLeg.L",
+  "IKBackLeg.L",
+  "FFB.L",
+  "BackShoulder.R",
+  "BackLeg.R",
+  "BackUpperLeg.R",
+  "BackLowerLeg.R",
+  "IKBackLeg.R",
+  "FFB.R",
+  "Tail1",
+  "Tail2",
+  "Tail3",
+  "Tail4",
+  "Tail5",
+  "Tail6",
+  "Tail7",
+  "PoleTargetBack.L",
+  "PoleTarget.L",
+  "PoleTargetBack.R",
+  "PoleTarget.R"
+ ],
+ "dropped_helper_bones": [
+  "PoleTargetBack.L",
+  "PoleTarget.L",
+  "PoleTargetBack.R",
+  "PoleTarget.R"
+ ],
+ "helper_policy": "dropped: unweighted leaf IK pole helpers; clips are baked FK so nothing references them",
+ "non_deforming_bones_kept": [],
+ "lods": {
+  "Cow_LOD0": {
+   "tris": 58080,
+   "verts": 29098,
+   "polys": 29040,
+   "materials": [
+    "M_Cow_Eye",
+    "M_Cow_Body"
+   ]
+  },
+  "Cow_LOD1": {
+   "tris": 14520,
+   "verts": 7298,
+   "polys": 7260,
+   "materials": [
+    "M_Cow_Eye",
+    "M_Cow_Body"
+   ]
+  },
+  "Cow_LOD2": {
+   "tris": 3376,
+   "verts": 1716,
+   "polys": 1982,
+   "materials": [
+    "M_Cow_Eye",
+    "M_Cow_Body"
+   ]
+  }
+ },
+ "weights": {
+  "Cow_LOD0": {
+   "verts": 29098,
+   "max_before": 4,
+   "max_after": 4,
+   "over_limit": 0,
+   "zero_or_foreign_removed": 0,
+   "max_dropped_weight": 0.0,
+   "unweighted": 0,
+   "method": "truncate",
+   "ngons_triangulated": 0
+  },
+  "Cow_LOD1": {
+   "verts": 7298,
+   "max_before": 4,
+   "max_after": 4,
+   "over_limit": 0,
+   "zero_or_foreign_removed": 0,
+   "max_dropped_weight": 0.0,
+   "unweighted": 0,
+   "method": "truncate",
+   "ngons_triangulated": 0
+  },
+  "Cow_LOD2": {
+   "verts": 1716,
+   "max_before": 4,
+   "max_after": 4,
+   "over_limit": 0,
+   "zero_or_foreign_removed": 0,
+   "max_dropped_weight": 0.0,
+   "unweighted": 0,
+   "method": "truncate",
+   "ngons_triangulated": 8
+  }
+ },
+ "weight_fit": {
+  "method": "none (source already within the influence limit)",
+  "frames_total": 1756,
+  "actions": [
+   "Call",
+   "Death",
+   "Death_Lying",
+   "Eating",
+   "Gallop",
+   "Gallop_RM",
+   "GetUp",
+   "Graze_End",
+   "Graze_Loop",
+   "Graze_Start",
+   "HeadShake",
+   "Idle",
+   "Idle_LookAround",
+   "Leap",
+   "LieDown",
+   "Lying_Idle",
+   "Stand",
+   "Trot",
+   "Trot_RM",
+   "TurnLeft90",
+   "TurnRight90",
+   "Walk",
+   "Walk_RM",
+   "Walk_Slow",
+   "Walk_Slow_RM"
+  ]
+ },
+ "max_influences": 4,
+ "takes": [
+  {
+   "name": "Call",
+   "frame_start": 0.0,
+   "frame_end": 72.0,
+   "frames": 73,
+   "seconds": 2.4,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Death",
+   "frame_start": 0.0,
+   "frame_end": 70.0,
+   "frames": 71,
+   "seconds": 2.3333333333333335,
+   "cyclic": false,
+   "root_motion": true
+  },
+  {
+   "name": "Death_Lying",
+   "frame_start": 0.0,
+   "frame_end": 60.0,
+   "frames": 61,
+   "seconds": 2.0,
+   "cyclic": false,
+   "root_motion": true
+  },
+  {
+   "name": "Eating",
+   "frame_start": 0.0,
+   "frame_end": 180.0,
+   "frames": 181,
+   "seconds": 6.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Gallop",
+   "frame_start": 0.0,
+   "frame_end": 17.0,
+   "frames": 18,
+   "seconds": 0.5666666666666667,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Gallop_RM",
+   "frame_start": 0.0,
+   "frame_end": 17.0,
+   "frames": 18,
+   "seconds": 0.5666666666666667,
+   "cyclic": true,
+   "root_motion": true
+  },
+  {
+   "name": "GetUp",
+   "frame_start": 0.0,
+   "frame_end": 150.0,
+   "frames": 151,
+   "seconds": 5.0,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Graze_End",
+   "frame_start": 0.0,
+   "frame_end": 40.0,
+   "frames": 41,
+   "seconds": 1.3333333333333333,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Graze_Loop",
+   "frame_start": 0.0,
+   "frame_end": 120.0,
+   "frames": 121,
+   "seconds": 4.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Graze_Start",
+   "frame_start": 0.0,
+   "frame_end": 42.0,
+   "frames": 43,
+   "seconds": 1.4,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "HeadShake",
+   "frame_start": 0.0,
+   "frame_end": 36.0,
+   "frames": 37,
+   "seconds": 1.2,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Idle",
+   "frame_start": 0.0,
+   "frame_end": 100.0,
+   "frames": 101,
+   "seconds": 3.3333333333333335,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Idle_LookAround",
+   "frame_start": 0.0,
+   "frame_end": 150.0,
+   "frames": 151,
+   "seconds": 5.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Leap",
+   "frame_start": 0.0,
+   "frame_end": 40.0,
+   "frames": 41,
+   "seconds": 1.3333333333333333,
+   "cyclic": false,
+   "root_motion": true
+  },
+  {
+   "name": "LieDown",
+   "frame_start": 0.0,
+   "frame_end": 150.0,
+   "frames": 151,
+   "seconds": 5.0,
+   "cyclic": false,
+   "root_motion": false
+  },
+  {
+   "name": "Lying_Idle",
+   "frame_start": 0.0,
+   "frame_end": 150.0,
+   "frames": 151,
+   "seconds": 5.0,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Stand",
+   "frame_start": 0.0,
+   "frame_end": 43.0,
+   "frames": 44,
+   "seconds": 1.4333333333333333,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Trot",
+   "frame_start": 0.0,
+   "frame_end": 19.0,
+   "frames": 20,
+   "seconds": 0.6333333333333333,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Trot_RM",
+   "frame_start": 0.0,
+   "frame_end": 19.0,
+   "frames": 20,
+   "seconds": 0.6333333333333333,
+   "cyclic": true,
+   "root_motion": true
+  },
+  {
+   "name": "TurnLeft90",
+   "frame_start": 0.0,
+   "frame_end": 56.0,
+   "frames": 57,
+   "seconds": 1.8666666666666667,
+   "cyclic": false,
+   "root_motion": true
+  },
+  {
+   "name": "TurnRight90",
+   "frame_start": 0.0,
+   "frame_end": 56.0,
+   "frames": 57,
+   "seconds": 1.8666666666666667,
+   "cyclic": false,
+   "root_motion": true
+  },
+  {
+   "name": "Walk",
+   "frame_start": 0.0,
+   "frame_end": 29.0,
+   "frames": 30,
+   "seconds": 0.9666666666666667,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Walk_RM",
+   "frame_start": 0.0,
+   "frame_end": 29.0,
+   "frames": 30,
+   "seconds": 0.9666666666666667,
+   "cyclic": true,
+   "root_motion": true
+  },
+  {
+   "name": "Walk_Slow",
+   "frame_start": 0.0,
+   "frame_end": 43.0,
+   "frames": 44,
+   "seconds": 1.4333333333333333,
+   "cyclic": true,
+   "root_motion": false
+  },
+  {
+   "name": "Walk_Slow_RM",
+   "frame_start": 0.0,
+   "frame_end": 43.0,
+   "frames": 44,
+   "seconds": 1.4333333333333333,
+   "cyclic": true,
+   "root_motion": true
+  }
+ ],
+ "fbx_options": {
+  "use_selection": true,
+  "use_visible": false,
+  "use_active_collection": false,
+  "object_types": [
+   "ARMATURE",
+   "MESH"
+  ],
+  "global_scale": 1.0,
+  "apply_unit_scale": true,
+  "apply_scale_options": "FBX_SCALE_ALL",
+  "axis_forward": "-Z",
+  "axis_up": "Y",
+  "bake_space_transform": true,
+  "use_mesh_modifiers": true,
+  "use_mesh_modifiers_render": true,
+  "mesh_smooth_type": "FACE",
+  "use_subsurf": false,
+  "use_mesh_edges": false,
+  "use_tspace": true,
+  "use_triangles": false,
+  "use_custom_props": false,
+  "colors_type": "NONE",
+  "prioritize_active_color": false,
+  "add_leaf_bones": false,
+  "primary_bone_axis": "Y",
+  "secondary_bone_axis": "X",
+  "use_armature_deform_only": true,
+  "armature_nodetype": "NULL",
+  "bake_anim": true,
+  "bake_anim_use_all_bones": true,
+  "bake_anim_use_nla_strips": true,
+  "bake_anim_use_all_actions": false,
+  "bake_anim_force_startend_keying": true,
+  "bake_anim_step": 1.0,
+  "bake_anim_simplify_factor": 0.0,
+  "path_mode": "RELATIVE",
+  "embed_textures": false,
+  "batch_mode": "OFF",
+  "use_metadata": true
+ },
+ "rig_axis_bake": true,
+ "textures": [
+  "T_CowEye_BaseColor.png",
+  "T_Cow_AO.png",
+  "T_Cow_BaseColor.png",
+  "T_Cow_MaskMap.png",
+  "T_Cow_MetallicSmoothness.png",
+  "T_Cow_Normal.png",
+  "T_Cow_Roughness.png"
+ ]
+}

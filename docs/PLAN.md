@@ -18,6 +18,17 @@ Status after the final multi-lens review (the 2026-09-28 18:16 build, to become 
 | Animations | Walk, Trot, Gallop, TurnLeft/TurnRight, Idle, Idle_LookAround, Graze_Start/Loop/End, Eating, Call, HeadShake, LieDown, Lying_Idle, GetUp, Death, Leap. Locomotion exported with and without root motion. 30 fps | done: 25 clips (Call, HeadShake, Stand, Walk_Slow(_RM) and Death_Lying were added to the plan); no in-place Leap (OI-08), no Dead_Idle (OI-09) |
 | Unity | FBX + textures; Editor script that builds materials, the LODGroup, an Animator Controller (speed/turn blend tree + states) and a prefab | written and compiled against Unity stubs, not run in Unity (OI-01). The controller has a Speed-only blend tree (Stand, Walk_Slow_RM, Walk_RM, Trot_RM, Gallop_RM plus time-scaled Trot/Gallop copies); turns are trigger states (OI-26) |
 
+## Adult cow (second asset)
+**Request (2026-09-29):** "create cow like cub": the adult cow as well, same pipeline and quality. Target: the GiM adult
+female (`videoplayback.mp4`, a Simmental with horns and udder). Plan and state:
+1. Profile switch (`tools/asset_profile.py`, `ASSET=cow`) so every tool builds either animal; the calf stays the default. *Done.*
+2. Model: source proportions (the source is an adult), horns kept, modelled udder + teats. *Done.*
+3. Coat: Simmental layout, horn / udder / hoof colours. *Done.*
+4. Animation: the calf's clip code on the cow rig at authoring scale; adult gait timing; cow-specific pose fits. *Done*
+   (the key-pose clips keep the calf's tempo: OI-45).
+5. Stage E: exact uniform scale to 1.42 x and `Cow*` names; export, validator, `Unity/Cow`, `CowSetup.cs`. *Done*
+   (validator 266 / 0 / 0; nothing run in Unity: OI-01).
+
 ## Phases
 
 1. **Model.** *Done.* Reshape the adult cow cage into a calf (`calf_stage_a.py`, `calf_stage_b.py`): proportions matched to the side-view silhouette, eyes, UVs, LODs.
