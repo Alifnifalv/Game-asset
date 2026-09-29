@@ -9,7 +9,7 @@ Pose (all angles in degrees)
   jaw                     + = the bill opens (lower mandible down)
   throat                  + = the hackles puff out (Throat bone swings forward/out)
   eyes                    (pitch, yaw) of both eyeballs
-  tailbase, tail          rot() of TailBase / Tail (pitch + = the tail tip goes down)
+  tailbase, tail          rot() of TailBase / Tail (pitch + = the tail tip LIFTS: the bones point back)
   tail_spread             0 closed .. 1 the glide fan (72 deg); the bind pose is 0.5
   wings {L, R}            WingPose
   legs {L, R}             LegPose
@@ -24,12 +24,13 @@ WingPose(fold, arm, elbow, wrist, feathers, elev, sweep, twist, spread, slot, fi
   finger_up               the outer primaries (P5-P10) pitch up (glide: fingertips curl up 10-15 deg)
   hand_twist              extra pronation of the hand (deg)
 
-LegPose(mtp, yaw, grip, thigh, pole, planted)
+LegPose(mtp, yaw, grip, thigh, pole, planted, local)
   mtp                     target of the foot base (the Tarsus tail = MTP joint) in the root frame; None = rest
   yaw                     foot direction change (deg, + = toes turn left)
   grip                    0 = toes flat on the ground (planted), 1 = curled (flight / perch grip)
   thigh                   femur swing (deg, + = knee forward/up) relative to the Hips
   pole                    rotation of the leg plane about the knee-foot line (deg)
+  local                   0..1: toe frame world-flat (0, ground) or carried by the tarsus (1, lying / dead)
 
 The fold targets (rest body frame): the humerus runs back along the flank, the forearm forward, the hand back (spec
 2.2); the flight feathers turn about their dorsal normals to lie parallel (primaries along the hand, secondaries and
@@ -61,7 +62,7 @@ FOLD_WRIST = Vector((0.060, -0.124, 0.250))
 FOLD_HAND = Vector((0.057, -0.050, 0.236))
 FOLD_PTIP = Vector((0.006, 0.192, 0.118))
 FOLD_N0 = Vector((1.0, 0.0, 0.10))                       # folded wing plane normal before orthogonalisation
-FOLD_LAT = {"elbow": 0.036, "wrist": 0.034, "hand": 0.030}   # lateral offsets from the plane through the shoulder
+FOLD_LAT = {"elbow": 0.031, "wrist": 0.018, "hand": 0.024}   # lateral offsets from the plane through the shoulder
 FOLD_DROP = {"prim": 0.0, "sec": -7.0, "tert": -14.0}      # in-plane angle of the folded feathers vs the primaries
 FOLD_FAN = 0.25                                           # deg per feather index: a slight stagger in the fold
 
@@ -130,13 +131,16 @@ class WingPose:
 
 
 class LegPose:
-    def __init__(self, mtp=None, yaw=0.0, grip=0.0, thigh=0.0, pole=0.0, planted=False):
+    """`local` 0..1: the toes' frame, 0 = world-flat (ground; yawed with the root and `yaw`), 1 = carried rigidly by
+    the tarsus (a lying / dead bird, legs off the ground)."""
+    def __init__(self, mtp=None, yaw=0.0, grip=0.0, thigh=0.0, pole=0.0, planted=False, local=0.0):
         self.mtp = None if mtp is None else Vector(mtp)
         self.yaw, self.grip, self.thigh, self.pole, self.planted = yaw, grip, thigh, pole, planted
+        self.local = local
 
     def copy(self):
         return LegPose(None if self.mtp is None else self.mtp.copy(), self.yaw, self.grip, self.thigh, self.pole,
-                       self.planted)
+                       self.planted, self.local)
 
 
 class Pose:
@@ -194,7 +198,8 @@ def blend(p0, p1, t):
         m0 = l0.mtp if l0.mtp is not None else _REST_MTP[s]
         m1 = l1.mtp if l1.mtp is not None else _REST_MTP[s]
         P.legs[s] = LegPose(m0.lerp(m1, t), lerp(l0.yaw, l1.yaw, t), lerp(l0.grip, l1.grip, t),
-                            lerp(l0.thigh, l1.thigh, t), lerp(l0.pole, l1.pole, t), l0.planted and l1.planted)
+                            lerp(l0.thigh, l1.thigh, t), lerp(l0.pole, l1.pole, t), l0.planted and l1.planted,
+                            lerp(l0.local, l1.local, t))
     keys = set(p0.extra) | set(p1.extra)
     P.extra = {k: p0.extra.get(k, Quaternion()).slerp(p1.extra.get(k, Quaternion()), t) for k in keys}
     return P
@@ -372,6 +377,11 @@ class RavenRig:
             amt[f"{n}.{s}"] = wp.get("feathers")
         for b, t in amt.items():
             out[b] = Quaternion().slerp(fq[b], min(max(t, 0.0), 1.0)) if t > 0 else Quaternion()
+        # covert pivot bones: the fold rotation of their reference remex (same parent, same rest orientation), so the
+        # marginal / lesser coverts skinned to them turn about their own roots (raven_anatomy.COVERT_GROUPS)
+        for g, _par, ref, _x, _y in A.COVERT_GROUPS:
+            for k in range(4):
+                out[f"Cov{g}{k + 1}.{s}"] = out[f"{ref}.{s}"].copy()
         # shoulder motion, expressed in the parent (Shoulder) space about the UpperArm head
         ua = f"UpperArm.{s}"
         if wp.elev or wp.sweep or wp.twist:
@@ -444,6 +454,9 @@ class RavenRig:
             M[b] = T(a0) @ R.to_4x4()
         # toes: world-anchored around the foot target, yawed with the root and the foot; grip curls them
         Ry_ = self.W.to_3x3() @ Rz(lp.yaw).to_3x3()
+        if lp.local > 0.0:                               # toes carried by the tarsus (rest relation kept)
+            Dq = (M[ta].to_3x3() @ self.rest[ta].to_3x3().inverted()).to_quaternion()
+            Ry_ = Ry_.to_quaternion().slerp(Dq, min(lp.local, 1.0)).to_matrix()
         for toe in TOES:
             a_, b_ = f"{toe}a.{s}", f"{toe}b.{s}"
             off = self.head(a_) - I["M"]
@@ -512,7 +525,11 @@ class RavenRig:
         samples = {n: [] for n in self.order}
         reach = {s: -1.0 for s in SIDES}
         for P in poses:
-            B = self.basis(self.solve(P))
+            # solve in the root frame (float32 maths 30 m out of the origin would bake ~0.01 mm errors into the
+            # local keys of root-motion clips); only the Root key carries the root motion
+            P0 = P.copy(); P0.root_pos = Vector((0, 0, 0)); P0.root_yaw = 0.0
+            B = self.basis(self.solve(P0))
+            B["Root"] = self.rest["Root"].inverted() @ T(P.root_pos) @ Rz(P.root_yaw) @ self.rest["Root"]
             for s in SIDES:
                 reach[s] = max(reach[s], self.last_reach[s])
             for n in self.order:
@@ -541,17 +558,37 @@ def stand():
     return P
 
 
+FLY_TUCK = Vector((0.030, -0.030, 0.085))    # tucked MTP in the rest body frame (left): under the belly (spec 2.4)
+FLY_TUCK_THIGH = 0.0
+FLY_WING = dict(elev=2.0, finger_up=12.0, slot=4.0)
+FLY_TAIL_SPREAD = 0.80           # flight tail fan (0 closed .. 1 the 72 deg glide wedge; spec 4.8: flapping as wide)
+
+
+def body_point(P, v):
+    """a point of the rest body frame carried by P's body transform (body_off, body_rot about COG) -> root frame"""
+    return (T(P.body_off) @ T(COG) @ body_matrix(*P.body_rot) @ T(-COG) @ Vector(v).to_4d()).to_3d()
+
+
+def tuck_legs(P, mtp=FLY_TUCK, thigh=FLY_TUCK_THIGH, grip=1.0, sides=SIDES):
+    """flight leg tuck: the MTP target given in the rest BODY frame (so it follows the body pitch/roll), the ankle
+    flexed, the tarsi folded back against the belly, toes curled (grip 1)"""
+    for s in sides:
+        P.legs[s] = LegPose(body_point(P, _side(mtp, s)), grip=grip, thigh=thigh)
+    return P
+
+
 def fly_neutral():
     """level flight attitude (spec 2.4): trunk pitched 28 deg nose-down (spine ~horizontal), neck extended, head level,
-    wings spread (bind planform), tail half spread, legs tucked back, toes curled"""
+    wings spread (bind planform), tail fanned (FLY_TAIL_SPREAD), legs tucked under the belly (tuck_legs), toes curled"""
     P = Pose()
     P.body_rot = (28.0, 0.0, 0.0)
     P.body_off = Vector((0, 0, 0.05))
     P.neck = {"Neck1": (-10, 0, 0), "Neck2": (-6, 0, 0), "Neck3": (8, 0, 0)}
     P.head = (-6.0, 0.0, 0.0)
-    P.tail_spread = 0.5
-    for s in SIDES:
-        P.legs[s] = LegPose(_side(Vector((0.030, 0.090, 0.140)), s), grip=1.0, thigh=-10)
+    P.tail_spread = FLY_TAIL_SPREAD
+    for s in SIDES:                       # arm dihedral +2 deg, fingertips curled up, a slight slotting (spec 2.4, 4.4)
+        P.wings[s] = WingPose(elev=FLY_WING["elev"], finger_up=FLY_WING["finger_up"], slot=FLY_WING["slot"])
+    tuck_legs(P)
     return P
 
 
@@ -602,7 +639,21 @@ def qa_clip(rig, act, planted_fn=None, loop=None, label=None, verbose=True):
             if planted_fn and planted_fn(s, f) and planted_fn(s, f - 1) and s in prev:
                 slide[s] = max(slide[s], (mtp[s] - prev[s]).length)
             prev[s] = mtp[s]
-        rel = {n: H[n] - H["Root"] for n in rig.order}
+        if f not in (f0, f1):
+            continue
+        # root-frame bone heads by float64 FK of the keyed local transforms (root-motion yaw included; world
+        # float32 heads lose ~5 um at 30 m of root motion)
+        L = {n: np.array(ae.pose.bones[n].matrix_basis, dtype=np.float64) for n in rig.order}
+        Mf = {}
+
+        def fk(n):
+            if n not in Mf:
+                p = rig.par[n]
+                rel_ = np.array(rig.relm[n], dtype=np.float64)
+                Mf[n] = (fk(p) @ rel_ if p else rel_) @ L[n]
+            return Mf[n]
+        Ri = np.linalg.inv(fk("Root"))
+        rel = {n: Vector((Ri @ fk(n))[:3, 3]) for n in rig.order}
         if f == f0:
             first = rel
         last = rel

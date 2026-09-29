@@ -15,7 +15,7 @@ chosen per feather with `outer_sign`).
 
 Shape:
   width(t) of each half vane, t in [0, 1] along the rachis:
-      calamus (bare quill) for t < t0; the vane widens over [t0, t0 + 0.12], holds, then the tip rounds off with
+      calamus (bare quill) for t < t0; the vane widens over [t0, t0 + grow] (grow 0.12; coverts taper longer), holds, then the tip rounds off with
       shape `tip` ('round', 'point', 'lance'); emarginated feathers narrow to `emarg_w` of the width beyond
       `emarg_t` (the outer vane only for P9-P10 notches, both vanes for the inner notch).
   curvature: the rachis bends ventrally (toward -n) by curve * L * t^2, and sideways by sweep * L * t^2 (+ = to s);
@@ -29,11 +29,11 @@ import numpy as np
 class Feather:
     __slots__ = ("name", "group", "bone", "base", "d", "n", "length", "w_in", "w_out", "t0", "tip", "emarg_t",
                  "emarg_w", "emarg_both", "curve", "sweep", "camber", "thick", "slot", "slot_under", "layer",
-                 "outer_sign", "twist", "lod")
+                 "outer_sign", "twist", "lod", "grow", "skin")
 
     def __init__(self, name, group, bone, base, d, n, length, w_in, w_out, t0=0.08, tip="round", emarg_t=None,
                  emarg_w=0.55, emarg_both=False, curve=0.05, sweep=0.0, camber=0.12, thick=0.0012, slot=None,
-                 layer=0, outer_sign=1.0, twist=0.0, lod=2):
+                 layer=0, outer_sign=1.0, twist=0.0, lod=2, grow=0.12, skin=None):
         self.name, self.group, self.bone = name, group, bone
         self.base = np.asarray(base, float)
         d = np.asarray(d, float); d = d / np.linalg.norm(d)
@@ -45,6 +45,10 @@ class Feather:
         self.slot = slot if slot is not None else (0.0, 0.0, 1.0, 1.0)      # (u0, v0, u1, v1) in the atlas
         self.slot_under = self.slot                                           # the underside's slot
         self.layer, self.outer_sign, self.twist, self.lod = layer, outer_sign, twist, lod
+        self.grow = grow                                   # vane growth span after t0 (a longer span = a tapered root)
+        # optional constant multi-bone skin [(bone, weight), ...] (<= 4, sum 1) instead of rigid on `bone`: the wing
+        # covert pivot bones (raven_anatomy.COVERT_GROUPS) blended so the feather turns about its own root
+        self.skin = skin
 
     @property
     def s(self):
@@ -63,7 +67,7 @@ def half_width(f, t, outer):
     """width (m) of one half vane at t (array); outer = True for the outer (narrow) vane"""
     w = f.w_out if outer else f.w_in
     t = np.asarray(t, float)
-    grow = _smooth(f.t0, f.t0 + 0.12, t)
+    grow = _smooth(f.t0, f.t0 + f.grow, t)
     if f.tip == "round":
         end = np.sqrt(np.clip(1.0 - ((t - 0.80) / 0.20).clip(0, None) ** 2, 0, 1))
     elif f.tip == "point":
@@ -83,7 +87,7 @@ def strip(f, nt=14, ns=3):
     along the outline (duplicated vertices: a UV seam), joined at the quill end.  Returns V (n,3), F (m,3), UV (n,2),
     and a per-face flag `under` (1 on the bottom sheet)."""
     L = f.length
-    t = np.linspace(0.0, 1.0, nt + 1)
+    t = 1.0 - (1.0 - np.linspace(0.0, 1.0, nt + 1)) ** 1.4               # denser toward the rounded tip
     wl = np.maximum(half_width(f, t, outer=(f.outer_sign < 0)), 0.0010)     # the -s side (a < 0)
     wr = np.maximum(half_width(f, t, outer=(f.outer_sign > 0)), 0.0010)     # the +s side (a > 0)
     wl[-1] = wr[-1] = 0.0

@@ -39,10 +39,13 @@ def main():
     a = ap.parse_args()
     import trimesh
     t = time.time()
-    prims = A.body_prims() + A.eye_socket_prims()
+    prims = [p for p in A.body_prims() if p.tag not in ("bill", "bill_low")] + A.eye_socket_prims()
     v, f = sdf_mesh(prims, a.h)
     print(f"body {len(f)} tris ({time.time() - t:.1f} s)")
     meshes = [trimesh.Trimesh(v, f, process=False)]
+    for which in ("upper", "lower"):                      # the lofted mandibles (explicit meshes)
+        bv, bf, _m = A.bill_mesh(which)
+        meshes.append(trimesh.Trimesh(bv, bf, process=False))
     for s in "LR":
         cv, cf = sdf_mesh(A.claw_prims(s), 0.0006)
         meshes.append(trimesh.Trimesh(cv, cf, process=False))

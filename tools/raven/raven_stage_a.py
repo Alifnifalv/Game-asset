@@ -1,20 +1,25 @@
 """Raven stage A: the mesh (numpy + pymeshlab + xatlas, no Blender).
 
-  python3 tools/raven/raven_stage_a.py [--out build/raven/stage_a.npz] [--h 0.0015] [--lod0 16000] [--lod1 4500]
+  python3 tools/raven/raven_stage_a.py [--out build/raven/stage_a.npz] [--h 0.0015] [--lod0 14600] [--lod1 4500]
           [--lod2 1300] [--preview <scratch>/a.glb]
 
-1. Body (material M_Raven_Body): the SDF of raven_anatomy (body, bill with the gape cut, legs, the spread wing arms,
-   eye sockets) on an --h grid, marching cubes, the largest component, quadric decimation to --lod0, Taubin smoothing.
-   Claws: fine SDF grids, decimated. One xatlas atlas for body + claws.
+1. Body (material M_Raven_Body): the SDF of raven_anatomy (body, head, legs, the spread wing arms, eye sockets and
+   lid rings; NOT the bill) on an --h grid, marching cubes, the largest component, quadric decimation to --lod0,
+   Taubin smoothing. Claws: fine SDF grids, decimated. Bill: the two lofted mandibles of raven_anatomy.bill_mesh()
+   (explicit meshes with a sharp tomium; upper rigid on Head, lower on Jaw, so P.jaw opens a clean gape). One xatlas
+   atlas for body + claws + bill (fed in centimetres: xatlas drops sub-FLT_EPSILON faces as degenerate).
 2. Eyes (M_Raven_Eye): UV spheres with a planar iris mapping, rigid on Eye.X.
 3. Feathers (M_Raven_Feather): every Feather of plumage.plumage() as a closed strip (feathers.strip), its UVs in the
-   feather atlas slot (plumage.SLOTS), rigid on its bone. LOD1/LOD2 REGENERATE the strips at a lower resolution and
+   feather atlas slot (plumage.SLOTS), rigid on its bone (or a constant blend of up to 4 bones, Feather.skin: the
+   marginal / lesser coverts on the covert pivot bones). LOD1/LOD2 REGENERATE the strips at a lower resolution and
    drop the groups whose Feather.lod is below the LOD.
 4. Body LOD1/LOD2: decimation with texture coordinates (LOD2 from LOD1, fold-free), as the dog.
-5. Skin weights (body): soft-min of the primitive distances, chains split along their bones; the gape line split hard
-   between Head (upper mandible) and Jaw (lower); Laplacian smoothing; at most 4 influences.
-6. Per-face `part`: 0 plumage (feathered skin), 1 mouth interior (the gape cut walls), 2 bill, 3 bare leg / toe skin,
-   4 claw, 5 eyeball, 6 feather (top), 7 feather (underside); per-face `mat`: 0 body, 1 feather, 2 eye.
+5. Skin weights (body): soft-min of the primitive distances, chains split along their bones; the chin / lores skin in
+   front of the rictus split along the gape line between Head and Jaw; Laplacian smoothing; at most 4 influences.
+6. Per-face `part`: 0 plumage (feathered skin, incl. the eyelid ring: raven_anatomy.eye_socket_prims), 1 mouth
+   interior (the palate and the floor of the mouth: the inner sheets of the mandibles), 2 bill (outer horn),
+   3 bare leg / toe skin, 4 claw, 5 eyeball, 6 feather (top), 7 feather (underside); per-face `mat`: 0 body,
+   1 feather, 2 eye. Shells: 0 body, 1-2 claws, 3-4 upper / lower mandible, 100+ eyes, 1000+ feathers.
 
 Output .npz, per LOD n: v<n> f<n> uv<n> (F,3,2) part<n> mat<n> shell<n> wi<n> ww<n>; plus the bone table
 (bones, heads, tails, parents, ups).
@@ -30,11 +35,12 @@ import plumage, feathers                                   # noqa: E402
 from meshops import (largest_component, decimate, decimate_uv_nofold, uv_folds, repair_folds, drop_degenerate, seg_dist,
                      smooth_weights, limit4)               # noqa: E402
 
+BILL_TAGS = ("bill", "bill_low")
 PART = dict(plumage=0, mouth=1, bill=2, leg=3, claw=4, eye=5, feather=6, feather_under=7)
 MAT = dict(body=0, feather=1, eye=2)
 # strip resolution (nt along, ns per half vane) per LOD, for long and short feathers
 RES = {0: ((12, 2), (6, 1)), 1: ((6, 1), (3, 1)), 2: ((4, 1), (2, 1))}
-SHORT = ("hackle", "bristle", "alula", "mcov", "ucov", "gcov", "pcov", "scap", "utc")
+SHORT = ("hackle", "bristle", "alula", "mcov", "ucov", "gcov", "pcov", "scap", "utc", "trouser")
 
 
 def log(*a):
@@ -106,9 +112,10 @@ def eye_mesh(s, seg=24, rings=14):
 
 
 def feather_meshes(Fs, lod, bones):
-    """all strips of the plumage for one LOD: V, F, UV (F,3,2), part, bone index per vertex"""
+    """all strips of the plumage for one LOD: V, F, UV (F,3,2), part, bone indices (n,4) and weights (n,4) per
+    vertex (rigid on Feather.bone, or the constant blend Feather.skin)"""
     bi = {b: i for i, b in enumerate(bones)}
-    Vs, Fs_, UVs, Ps, Bs, Ss = [], [], [], [], [], []
+    Vs, Fs_, UVs, Ps, Bs, Ws, Ss = [], [], [], [], [], [], []
     base = 0
     for k, fe in enumerate(Fs):
         if fe.lod < lod:
@@ -118,10 +125,17 @@ def feather_meshes(Fs, lod, bones):
         V, F, UV, under = feathers.strip(fe, nt, ns)
         Vs.append(V); Fs_.append(F + base); UVs.append(UV[F])
         Ps.append(np.where(under > 0, PART["feather_under"], PART["feather"]).astype(np.int32))
-        Bs.append(np.full(len(V), bi[fe.bone], np.int32)); Ss.append(np.full(len(F), 1000 + k, np.int32))
+        if fe.skin:                                      # constant multi-bone skin (covert pivot bones)
+            bidx = np.zeros((len(V), 4), np.int32); bw = np.zeros((len(V), 4), np.float32)
+            for j, (bn, w) in enumerate(fe.skin[:4]):
+                bidx[:, j] = bi[bn]; bw[:, j] = w
+        else:
+            bidx = np.zeros((len(V), 4), np.int32); bw = np.zeros((len(V), 4), np.float32)
+            bidx[:, 0] = bi[fe.bone]; bw[:, 0] = 1.0
+        Bs.append(bidx); Ws.append(bw); Ss.append(np.full(len(F), 1000 + k, np.int32))
         base += len(V)
     return (np.concatenate(Vs), np.concatenate(Fs_), np.concatenate(UVs), np.concatenate(Ps), np.concatenate(Bs),
-            np.concatenate(Ss))
+            np.concatenate(Ws), np.concatenate(Ss))
 
 
 def main():
@@ -129,9 +143,10 @@ def main():
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.dirname(HERE)), "build", "raven",
                                                   "stage_a.npz"))
     ap.add_argument("--h", type=float, default=0.0015)
-    ap.add_argument("--lod0", type=int, default=16000, help="body triangles of LOD0 (claws, eyes, feathers on top)")
+    ap.add_argument("--lod0", type=int, default=14600, help="body triangles of LOD0 (claws, eyes, feathers on top)")
     ap.add_argument("--lod1", type=int, default=4500)
-    ap.add_argument("--lod2", type=int, default=1300)
+    ap.add_argument("--lod2", type=int, default=1200)
+    ap.add_argument("--bill-st", type=int, default=22, help="bill loft stations (LOD0)")
     ap.add_argument("--preview", help="also write LOD0 as a GLB (no rig)")
     a = ap.parse_args()
     t0 = time.time()
@@ -141,7 +156,8 @@ def main():
     bi = {b: i for i, b in enumerate(bones)}
 
     # ---- 1. body
-    prims = A.body_prims() + A.eye_socket_prims()
+    # the bill is meshed explicitly (A.bill_mesh); its MeshSDF stand-ins stay out of the grid
+    prims = [p for p in A.body_prims() if p.tag not in BILL_TAGS] + A.eye_socket_prims()
     lo = np.min([p.aabb()[0] for p in prims if p.op == "add"], axis=0) - 0.006
     hi = np.max([p.aabb()[1] for p in prims if p.op == "add"], axis=0) + 0.006
     G = Field(lo, hi, a.h)
@@ -155,16 +171,9 @@ def main():
     v, f = decimate(v, f, a.lod0, quality=0.6, smooth=2)
     log(f"body LOD0 {len(f)} tris, {len(v)} verts ({time.time() - t0:.0f} s)")
     fc = v[f].mean(axis=1)
-    uncut = [p for p in prims if p.op == "add"]
-    d_uncut = eval_prims(uncut, fc)
     part = np.zeros(len(f), np.int32)
-    gape = A.GapeCut()
-    part[(d_uncut < -0.0004) & (gape.dist(fc) < 0.0018)] = PART["mouth"]
-    feathered = [p for p in prims if p.op == "add" and p.tag not in ("bill", "bill_low", "tarsus", "toe", "claw")]
+    feathered = [p for p in prims if p.op == "add" and p.tag not in ("tarsus", "toe", "claw")]
     d_feath = eval_prims(feathered, fc)
-    billp = [p for p in prims if p.tag in ("bill", "bill_low")]
-    d_bill = np.min([p.dist(fc) for p in billp], axis=0)
-    part[(part == 0) & (d_bill < 0.0012) & (d_feath > 0.0006)] = PART["bill"]
     legp = [p for p in prims if p.tag in ("tarsus", "toe")]
     d_leg = np.min([p.dist(fc) for p in legp], axis=0)
     part[(part == 0) & (d_leg < 0.0012) & (d_feath > 0.0008) & (fc[:, 2] < 0.075)] = PART["leg"]
@@ -172,7 +181,7 @@ def main():
     Wb = gape_split(v, Wb, bones)
     Wb = smooth_weights(Wb, f, iters=3, lam=0.5)
     Wb = gape_split(v, Wb, bones)
-    log(f"parts: mouth {np.sum(part == 1)}, bill {np.sum(part == 2)}, leg {np.sum(part == 3)}")
+    log(f"parts: leg {np.sum(part == 3)}")
     shells_v, shells_f, shells_W, shells_p = [v], [f], [Wb], [part]
 
     # claws
@@ -190,17 +199,27 @@ def main():
         shells_p.append(np.full(len(cf), PART["claw"], np.int32))
         log(f"claws {s}: {len(cf)} tris")
 
+    # bill: the two lofted mandibles (outer sheet 'bill', palate / floor of the mouth 'mouth'), rigid on Head / Jaw
+    for which, bone in (("upper", "Head"), ("lower", "Jaw")):
+        bv, bf, bm = A.bill_mesh(which, n_st=a.bill_st if which == "upper" else a.bill_st - 4)
+        W = np.zeros((len(bv), len(bones))); W[:, bi[bone]] = 1.0
+        shells_v.append(bv); shells_f.append(bf.astype(np.int64)); shells_W.append(W)
+        shells_p.append(np.where(bm, PART["mouth"], PART["bill"]).astype(np.int32))
+        log(f"bill {which}: {len(bf)} tris ({int(bm.sum())} mouth)")
+
     offs = np.cumsum([0] + [len(x) for x in shells_v])
     V0 = np.concatenate(shells_v)
     F0 = np.concatenate([sf + offs[i] for i, sf in enumerate(shells_f)])
     W0 = np.concatenate(shells_W)
     P0 = np.concatenate(shells_p)
     S0 = np.concatenate([np.full(len(sf), i, np.int32) for i, sf in enumerate(shells_f)])
+    bill_sids = (len(shells_f) - 2, len(shells_f) - 1)
 
     # ---- UV atlas of the body material
     import xatlas
     atlas = xatlas.Atlas()
-    atlas.add_mesh(V0.astype(np.float32), F0.astype(np.uint32))
+    # centimetres: xatlas drops faces under FLT_EPSILON area as degenerate (sub-mm2 bill and claw facets in meters)
+    atlas.add_mesh((V0 * 100.0).astype(np.float32), F0.astype(np.uint32))
     co = xatlas.ChartOptions(); co.max_iterations = 4; co.normal_deviation_weight = 2.0; co.max_cost = 4.0
     po = xatlas.PackOptions(); po.resolution = 4096; po.padding = 12; po.bilinear = True; po.blockAlign = True
     atlas.generate(co, po)
@@ -232,9 +251,8 @@ def main():
     log(f"plumage: {len(FE)} feathers")
 
     def with_feathers(Vb, Fb, UVb, Pb, Sb, Mb, Wb_idx, Wb_w, lod):
-        fv, ff, fuv, fp, fbone, fs = feather_meshes(FE, lod, bones)
-        wi = np.zeros((len(fv), 4), np.int32); wi[:, 0] = fbone
-        ww = np.zeros((len(fv), 4), np.float32); ww[:, 0] = 1.0
+        fv, ff, fuv, fp, fbone, fw, fs = feather_meshes(FE, lod, bones)
+        wi, ww = fbone, fw
         n = len(Vb)
         return (np.concatenate([Vb, fv]), np.concatenate([Fb, ff + n]), np.concatenate([UVb, fuv]),
                 np.concatenate([Pb, fp]), np.concatenate([Sb, fs]),
@@ -256,7 +274,7 @@ def main():
     for lod, target in ((1, a.lod1), (2, a.lod2)):
         Vl, Fl, UVl, Pl, Sl, Ml, src = [], [], [], [], [], [], []
         base = 0
-        tot = int(np.sum(S0 < 100))
+        tot = int(np.sum((S0 < 100) & ~np.isin(S0, bill_sids)))       # the bill has its own budget
         new = {}
         for sid in np.unique(S0):
             fm = S0 == sid
@@ -267,7 +285,9 @@ def main():
             else:
                 remap = -np.ones(len(V0), int); remap[used] = np.arange(len(used))
                 vs, fs2, uvs = V0[used], remap[fs], UV0[fm]
-            if sid < 100:
+            if sid in bill_sids:                         # keep the hook and the tomium readable
+                tgt = {1: 300, 2: 130}[lod]
+            elif sid < 100:
                 tgt = max(int(target * len(fs) / tot), 60)
             else:                                            # eyes
                 tgt = {1: 200, 2: 80}[lod]
@@ -280,7 +300,7 @@ def main():
                         break
             new[sid] = (vs, fs2, uvs)
             Vl.append(vs); Fl.append(fs2 + base); UVl.append(uvs)
-            if sid == 0:
+            if sid == 0 or sid in bill_sids:            # mixed parts: nearest LOD0 face
                 tree = cKDTree(V0[F0[fm]].mean(axis=1)); _, j = tree.query(vs[fs2].mean(axis=1))
                 Pl.append(P0[fm][j])
             else:

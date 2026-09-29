@@ -2,7 +2,7 @@
 silhouette overlay on the GiM perched still 88c16e0c (known scale 0.4486 mm/px, origin = the near foot at (1165, 995)).
 
   python3 tools/raven/raven_views.py <model.glb|.blend|.fbx> <out.png> [--action NAME --frame N] [--res 420]
-          [--samples 8] [--views side,front,top,three,head,headfront,foot,wing] [--color clay|black] [--textured]
+          [--samples 8] [--views side,front,top,three,head,headside,headfront,foot,wing,wingside,backq,frontq,carpal,carpalf] [--color clay|black] [--textured]
           [--cmp88 <overlay.png>]
 """
 import argparse, math, os, re, sys, tempfile
@@ -114,6 +114,10 @@ VIEWS = {
     "wingside": dict(ortho=0.40, loc=(3.0, 0.02, 0.20), tgt=(0.0, 0.02, 0.20)),
     "backq": dict(lens=60, loc=(0.55, 0.75, 0.55), tgt=(0.0, 0.0, 0.20)),
     "frontq": dict(lens=60, loc=(0.60, -0.75, 0.45), tgt=(0.0, -0.05, 0.22)),
+    "carpal": dict(lens=85, loc=(0.36, -0.42, 0.40), tgt=(0.05, -0.09, 0.24)),       # folded wing, 3/4 front
+    "carpalf": dict(ortho=0.20, loc=(0.0, -3.0, 0.25), tgt=(0.0, -0.1, 0.25)),         # shoulders, straight front
+    "root": dict(lens=60, loc=(0.45, 0.30, 0.62), tgt=(0.06, -0.06, 0.30)),           # wing root from above-behind
+    "roottop": dict(ortho=0.30, loc=(0.10, -0.05, 3.0), tgt=(0.10, -0.05, 0.25)),     # wing root from straight above
     "wing":  dict(ortho=0.62, loc=(0.26, -0.02 + 3 * 0.53, 0.26 + 3 * 0.848), tgt=(0.26, -0.02, 0.26)),
 }
 tiles = []
@@ -125,7 +129,7 @@ for vname in a.views.split(","):
     else:
         cam_d.type = "PERSP"; cam_d.lens = v["lens"]
     look(v["loc"], v["tgt"])
-    if vname == "top":
+    if vname in ("top", "roottop"):
         cam.rotation_euler = (0, 0, math.radians(90))
     p = os.path.join(tmp, vname + ".png"); sc.render.filepath = p
     bpy.ops.render.render(write_still=True)
