@@ -111,6 +111,9 @@ VIEWS = {
     "headside": dict(ortho=0.16, loc=(head.x + 3, head.y, head.z), tgt=head),
     "headfront": dict(ortho=0.14, loc=(head.x, head.y - 3, head.z), tgt=head),
     "foot":  dict(lens=70, loc=(foot.x + 0.16, foot.y - 0.22, foot.z + 0.10), tgt=foot + Vector((0, -0.01, 0.01))),
+    "wingside": dict(ortho=0.40, loc=(3.0, 0.02, 0.20), tgt=(0.0, 0.02, 0.20)),
+    "backq": dict(lens=60, loc=(0.55, 0.75, 0.55), tgt=(0.0, 0.0, 0.20)),
+    "frontq": dict(lens=60, loc=(0.60, -0.75, 0.45), tgt=(0.0, -0.05, 0.22)),
     "wing":  dict(ortho=0.62, loc=(0.26, -0.02 + 3 * 0.53, 0.26 + 3 * 0.848), tgt=(0.26, -0.02, 0.26)),
 }
 tiles = []

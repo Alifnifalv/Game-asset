@@ -96,21 +96,30 @@ def remex_lookup(s):
 
 
 def coverts(s):
-    """greater secondary / primary coverts, median coverts, alula, underwing coverts (arm)"""
+    """greater secondary / primary coverts, median coverts, alula, underwing coverts (arm).
+    Every covert rides the bone of the remex it overlies and is ROOTED AT THAT REMEX'S BASE (a few layers above it, or
+    below for the underwing coverts), pointing along it: the fold turns each remex about its base, so a covert rooted
+    there turns with it instead of swinging around it. The shingle order follows the remiges (proximal above distal)."""
     F = []
     sx = 1.0 if s == "L" else -1.0
-    top = 0.004 + 0.0022                       # just above T3 (the top remex)
-    # greater secondary coverts: one per secondary / tertial; tip line (spec 4.6)
-    tips = {"Tert3": (0.030, 0.100), "Tert2": (0.058, 0.098), "Tert1": (0.086, 0.094), "Sec6": (0.110, 0.088),
-            "Sec5": (0.131, 0.085), "Sec4": (0.153, 0.078), "Sec3": (0.176, 0.072), "Sec2": (0.199, 0.066),
-            "Sec1": (0.219, 0.060)}
-    for k, (name, (tx, ty)) in enumerate(tips.items()):
-        _b, d, n = A.remex_frame(name, s)
-        L = 0.092 if name.startswith("Tert") else 0.074
-        tip = A.wp(tx, ty, s, top + 0.0009 * k)
-        b = tip - d * L
-        f = Feather(f"GCov_{name}.{s}", "gcov", f"{name}.{s}", b, d, n, L, 0.016, 0.013, t0=0.05, tip="round",
-                    curve=0.01, camber=0.03, thick=0.0012, slot=SLOTS[_slot("gcov", k, 3)], lod=1)
+    st = A.LAYER_STEP
+    arm = ["Tert3", "Tert2", "Tert1", "Sec6", "Sec5", "Sec4", "Sec3", "Sec2", "Sec1"]
+    # greater secondary coverts: one per secondary / tertial, tips at 39-54 % of the chord (spec 4.6)
+    for k, name in enumerate(arm):
+        b0, d, n = A.remex_frame(name, s)
+        L = 0.092 if name.startswith("Tert") else 0.076
+        b = b0 + n * (2.5 * st) + d * 0.004
+        f = Feather(f"GCov_{name}.{s}", "gcov", f"{name}.{s}", b, d, n, L, 0.017, 0.014, t0=0.05, tip="round",
+                    curve=0.01, camber=0.02, thick=0.0010, slot=SLOTS[_slot("gcov", k, 3)], lod=1)
+        f.outer_sign = _outer_sign(f, V(sx, 0, 0))
+        f.slot_under = SLOTS["gcov_u"]
+        F.append(f)
+    # median coverts over the greater covert bases (0.04-0.05)
+    for k, name in enumerate(arm):
+        b0, d, n = A.remex_frame(name, s)
+        b = b0 + n * (5.0 * st) - d * 0.006
+        f = Feather(f"MCov_{name}.{s}", "mcov", f"{name}.{s}", b, d, n, 0.048, 0.014, 0.012, t0=0.05, tip="round",
+                    curve=0.01, camber=0.02, thick=0.0010, slot=SLOTS[_slot("mcov", k, 2)], lod=0)
         f.outer_sign = _outer_sign(f, V(sx, 0, 0))
         f.slot_under = SLOTS["gcov_u"]
         F.append(f)
@@ -118,23 +127,10 @@ def coverts(s):
     for k, name in enumerate(["Prim01", "Prim02", "Prim03", "Prim04", "Prim05", "Prim06", "Prim07", "Prim08"]):
         b0, d, n = A.remex_frame(name, s)
         L = 0.088 - 0.004 * k
-        b = b0 + n * (0.0060 + 0.0006 * k) + d * 0.004
+        b = b0 + n * (2.5 * st) + d * 0.004
         f = Feather(f"PCov_{name}.{s}", "pcov", f"{name}.{s}", b, d, n, L, 0.015, 0.011, t0=0.05, tip="round",
-                    curve=0.01, camber=0.03, thick=0.0011, slot=SLOTS[_slot("pcov", k, 2)], lod=1)
+                    curve=0.01, camber=0.02, thick=0.0010, slot=SLOTS[_slot("pcov", k, 2)], lod=1)
         f.outer_sign = _outer_sign(f, -A.U_WING)
-        f.slot_under = SLOTS["gcov_u"]
-        F.append(f)
-    # median coverts: one row, 0.04-0.05 long, over the greater covert bases (ride the nearest remex)
-    rows = [("Tert3", 0.034), ("Tert2", 0.060), ("Tert1", 0.086), ("Sec6", 0.112), ("Sec5", 0.134), ("Sec4", 0.156),
-            ("Sec3", 0.178), ("Sec2", 0.198), ("Sec1", 0.216)]
-    for k, (name, x) in enumerate(rows):
-        _b, d, n = A.remex_frame(name, s)
-        L = 0.046
-        tip = A.wp(x, 0.050, s, top + 0.0105 + 0.0006 * k)
-        b = tip - d * L
-        f = Feather(f"MCov_{name}.{s}", "mcov", f"{name}.{s}", b, d, n, L, 0.013, 0.011, t0=0.05, tip="round",
-                    curve=0.01, camber=0.03, thick=0.0011, slot=SLOTS[_slot("mcov", k, 2)], lod=0)
-        f.outer_sign = _outer_sign(f, V(sx, 0, 0))
         f.slot_under = SLOTS["gcov_u"]
         F.append(f)
     # alula: 3 feathers along the leading edge at the wrist (longest 0.065)
@@ -148,14 +144,12 @@ def coverts(s):
         f.outer_sign = _outer_sign(f, -A.U_WING)
         f.slot_under = SLOTS["alula"]
         F.append(f)
-    # underwing coverts on the arm: below the secondaries (ventral), 2 rows covering 40-50 % of the chord
-    low = 0.004 - 11 * A.LAYER_STEP
-    for row, (y_tip, L, h) in enumerate(((0.090, 0.075, 0.0), (0.050, 0.050, -0.0014))):
-        for k, (name, x) in enumerate(rows):
-            _b, d, n = A.remex_frame(name, s)
-            tip = A.wp(x + 0.004 * row, y_tip, s, low + h - 0.0007 * k)
-            b = tip - d * L
-            f = Feather(f"UCov{row}_{name}.{s}", "ucov", f"{name}.{s}", b, d, n, L, 0.014, 0.012, t0=0.05,
+    # underwing coverts on the arm: under each secondary / tertial, 2 rows covering 40-50 % of the chord
+    for row, (L, h) in enumerate(((0.080, -2.5), (0.052, -4.5))):
+        for k, name in enumerate(arm):
+            b0, d, n = A.remex_frame(name, s)
+            b = b0 + n * (h * st) + d * 0.003
+            f = Feather(f"UCov{row}_{name}.{s}", "ucov", f"{name}.{s}", b, d, n, L, 0.015, 0.013, t0=0.05,
                         tip="round", curve=-0.01, camber=0.02, thick=0.0010, slot=SLOTS["ucov"], lod=1 - row)
             f.outer_sign = _outer_sign(f, V(sx, 0, 0))
             f.slot_under = SLOTS["ucov"]

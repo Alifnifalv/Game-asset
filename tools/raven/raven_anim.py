@@ -283,7 +283,8 @@ class RavenRig:
             world[f"Forearm.{s}"] = self._frame_yz(Wr - e_fk, n_f)
             w_fk = e_fk + world[f"Forearm.{s}"] @ Vector((0, self.length[f"Forearm.{s}"], 0))
             world[f"Hand.{s}"] = self._frame_yz(H - w_fk, n_f)
-            e_u = n_f.cross(d_b)                          # in-plane 'up' (rotation + about n_f turns d_b toward it)
+            up = Vector((0, 0, 1))                        # in-plane 'up': the plane direction closest to world up
+            e_u = (up - d_b * up.dot(d_b) - n_f * up.dot(n_f)).normalized()     # (same sense on both sides)
             for i, name in enumerate(REMEX):
                 kind = "prim" if name.startswith("Prim") else ("sec" if name.startswith("Sec") else "tert")
                 ang = rad(FOLD_DROP[kind] + FOLD_FAN * (A.REMEX_ORDER.index(name) - 9))
@@ -317,7 +318,7 @@ class RavenRig:
         for n, v in P.neck.items():
             local[n] = rot(*v)
         local["Head"] = rot(*P.head)
-        local["Jaw"] = rot(-P.jaw)                       # the Jaw bone points forward: - pitch = tip up... see QA
+        local["Jaw"] = rot(P.jaw)                        # the Jaw bone points forward: + pitch = tip down = open
         local["Throat"] = rot(-P.throat)
         for s in SIDES:
             local[f"Eye.{s}"] = rot(P.eyes[0], P.eyes[1])
@@ -379,7 +380,7 @@ class RavenRig:
             # elevation: about the forward axis (+ = up for both sides), sweep about world Z (+ = forward),
             # twist about the humerus (+ = leading edge down)
             hum = (self.rest[ua].to_3x3() @ Vector((0, 1, 0))).normalized()
-            Rw = (Quaternion(fwd, rad(wp.elev) * -sx) @ Quaternion(Vector((0, 0, 1)), rad(wp.sweep) * sx)
+            Rw = (Quaternion(fwd, rad(wp.elev) * sx) @ Quaternion(Vector((0, 0, 1)), rad(wp.sweep) * -sx)
                   @ Quaternion(hum, rad(wp.twist) * sx))
             # world-space delta about the shoulder -> parent space (the Shoulder bone's rest frame)
             Rp = self.rest[self.par[ua]].to_3x3()
@@ -544,7 +545,7 @@ def fly_neutral():
     """level flight attitude (spec 2.4): trunk pitched 28 deg nose-down (spine ~horizontal), neck extended, head level,
     wings spread (bind planform), tail half spread, legs tucked back, toes curled"""
     P = Pose()
-    P.body_rot = (-28.0, 0.0, 0.0)
+    P.body_rot = (28.0, 0.0, 0.0)
     P.body_off = Vector((0, 0, 0.05))
     P.neck = {"Neck1": (-10, 0, 0), "Neck2": (-6, 0, 0), "Neck3": (8, 0, 0)}
     P.head = (-6.0, 0.0, 0.0)
