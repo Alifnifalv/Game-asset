@@ -19,6 +19,43 @@ def mirror(p):
 
 
 # --------------------------------------------------------------------------------------------------------------------
+# Head placement. Everything of the head (skull, muzzle, jaw, lips, nose, ears, eyes, mouth cut, teeth, tongue and the
+# head joints) is authored in the design frame of the first build, whose atlas joint is ATLAS0, and placed by
+# H(p) = HEAD_POS + RH @ (p - ATLAS0): HEAD_POS moves the atlas (the head carriage), HEAD_PITCH (deg, + = nose down)
+# tilts the head about it. dog_stage_a.py and dog_textures.py map points back with H_inv for the lip line and the head
+# markings, so changing these two values moves the whole head consistently.
+# --------------------------------------------------------------------------------------------------------------------
+ATLAS0 = V(0, -0.425, 0.775)
+HEAD_POS = V(0, -0.425, 0.775)
+HEAD_PITCH = 0.0
+
+
+def _rh():
+    a = np.radians(HEAD_PITCH)
+    c, s_ = np.cos(a), np.sin(a)
+    return np.array([[1, 0, 0], [0, c, -s_], [0, s_, c]])
+
+
+RH = _rh()
+
+
+def H(p):
+    """design-frame head point -> world"""
+    return HEAD_POS + RH @ (np.asarray(p, dtype=float) - ATLAS0)
+
+
+def Hd(v):
+    """design-frame head direction -> world"""
+    return RH @ np.asarray(v, dtype=float)
+
+
+def H_inv(P):
+    """world points (N, 3) or (3,) -> design-frame head coordinates"""
+    P = np.asarray(P, dtype=float)
+    return (P - HEAD_POS) @ RH + ATLAS0
+
+
+# --------------------------------------------------------------------------------------------------------------------
 # Rest skeleton (joint positions). Leg joints are given for the left side (+X) and mirrored.
 # --------------------------------------------------------------------------------------------------------------------
 J = {
@@ -31,18 +68,19 @@ J = {
     "withers":   V(0, -0.285, 0.560),   # T1 (the skin top of the withers is 0.66 m: the dorsal spines stand up)
     "neck1":     V(0, -0.330, 0.600),   # C7/C6
     "neck2":     V(0, -0.385, 0.690),
-    "atlas":     V(0, -0.425, 0.775),   # head joint
-    "snout":     V(0, -0.662, 0.752),   # nose tip
-    "tmj":       V(0, -0.470, 0.718),   # jaw hinge (midline stand-in for both TMJs)
-    "chin":      V(0, -0.640, 0.686),
-    "tongue0":   V(0, -0.495, 0.703),
-    "tongue1":   V(0, -0.555, 0.703),
-    "tongue2":   V(0, -0.610, 0.703),
-    "tongue3":   V(0, -0.645, 0.703),
+    "atlas":     HEAD_POS.copy(),       # head joint
+    # head joints: design frame, placed by H()
+    "snout":     H(V(0, -0.662, 0.752)),   # nose tip
+    "tmj":       H(V(0, -0.470, 0.718)),   # jaw hinge (midline stand-in for both TMJs)
+    "chin":      H(V(0, -0.640, 0.686)),
+    "tongue0":   H(V(0, -0.495, 0.703)),
+    "tongue1":   H(V(0, -0.555, 0.703)),
+    "tongue2":   H(V(0, -0.610, 0.703)),
+    "tongue3":   H(V(0, -0.645, 0.703)),
     # ear (left)
-    "ear0":      V(0.062, -0.452, 0.858),
-    "ear1":      V(0.090, -0.468, 0.848),
-    "ear2":      V(0.103, -0.518, 0.745),
+    "ear0":      H(V(0.062, -0.452, 0.858)),
+    "ear1":      H(V(0.090, -0.468, 0.848)),
+    "ear2":      H(V(0.103, -0.518, 0.745)),
     # front leg (left)
     "scap":      V(0.062, -0.215, 0.615),
     "shoulder":  V(0.098, -0.340, 0.450),
@@ -87,8 +125,8 @@ def bone_table():
     B["Spine3"] = (J["thorax"], J["withers"], "Spine2")
     B["Neck1"] = (J["withers"], J["neck2"], "Spine3")
     B["Neck2"] = (J["neck2"], J["atlas"], "Neck1")
-    B["Head"] = (J["atlas"], V(0, -0.560, 0.790), "Neck2")
-    B["Nose"] = (V(0, -0.560, 0.790), J["snout"], "Head")        # muzzle (sniff wrinkle / nose twitch)
+    B["Head"] = (J["atlas"], H(V(0, -0.560, 0.790)), "Neck2")
+    B["Nose"] = (H(V(0, -0.560, 0.790)), J["snout"], "Head")        # muzzle (sniff wrinkle / nose twitch)
     B["Jaw"] = (J["tmj"], J["chin"], "Head")
     B["Tongue1"] = (J["tongue0"], J["tongue1"], "Jaw")
     B["Tongue2"] = (J["tongue1"], J["tongue2"], "Tongue1")
@@ -216,40 +254,55 @@ def trunk_prims():
     return P
 
 
+def HE(c, r, **kw):
+    """ellipsoid in the head design frame"""
+    return Ellipsoid(H(c), r, RH, **kw)
+
+
+def HC(a, b, ra, rb, **kw):
+    """round cone in the head design frame"""
+    return RoundCone(H(a), H(b), ra, rb, **kw)
+
+
+def HB(c, h, rad, **kw):
+    """rounded box in the head design frame"""
+    return RoundBox(H(c), h, rad, RH, **kw)
+
+
 def neck_head_prims():
     P = []
-    # neck: strong, muscular, slightly arched, no dewlap
-    P.append(RoundCone(V(0, -0.300, 0.540), V(0, -0.420, 0.760), 0.135, 0.095, k=0.06,
+    # neck: strong, muscular, slightly arched, no dewlap (the head end follows the head placement)
+    P.append(RoundCone(V(0, -0.300, 0.540), H(V(0, -0.420, 0.760)), 0.135, 0.095, k=0.06,
                        bones=["Spine3", "Neck1", "Neck2"], tag="neck"))
-    P.append(RoundCone(V(0, -0.260, 0.625), V(0, -0.420, 0.820), 0.058, 0.055, k=0.05,
+    P.append(RoundCone(V(0, -0.260, 0.625), H(V(0, -0.420, 0.820)), 0.058, 0.055, k=0.05,
                        bones=["Spine3", "Neck1", "Neck2"], tag="crest"))
     # throat under the jaw angle
-    P.append(Ellipsoid(V(0, -0.450, 0.680), V(0.070, 0.060, 0.050), k=0.04, bones=["Neck2", "Head"], tag="throat"))
+    P.append(HE(V(0, -0.450, 0.680), V(0.070, 0.060, 0.050), k=0.04, bones=["Neck2", "Head"], tag="throat"))
     # skull: broad between the ears, flat forehead
-    P.append(Ellipsoid(V(0, -0.475, 0.800), V(0.082, 0.098, 0.074), k=0.04, bones="Head", tag="skull"))
-    P.append(Ellipsoid(V(0, -0.460, 0.828), V(0.078, 0.072, 0.047), k=0.03, bones="Head", tag="skulltop"))
+    P.append(HE(V(0, -0.475, 0.800), V(0.082, 0.098, 0.074), k=0.04, bones="Head", tag="skull"))
+    P.append(HE(V(0, -0.460, 0.828), V(0.078, 0.072, 0.047), k=0.03, bones="Head", tag="skulltop"))
     # cheeks (masseter / zygomatic arch): strongly developed
     for sx in (1, -1):
-        P.append(Ellipsoid(V(sx * 0.060, -0.498, 0.752), V(0.040, 0.058, 0.048), k=0.03, bones=["Head", "Jaw"],
-                           tag="cheek"))
+        P.append(HE(V(sx * 0.060, -0.498, 0.752), V(0.040, 0.058, 0.048), k=0.03, bones=["Head", "Jaw"],
+                    tag="cheek"))
         # brow ridge above the eye (well-defined stop)
-        P.append(Ellipsoid(V(sx * 0.034, -0.540, 0.818), V(0.026, 0.024, 0.017), k=0.02, bones="Head", tag="brow"))
+        P.append(HE(V(sx * 0.034, -0.540, 0.818), V(0.026, 0.024, 0.017), k=0.02, bones="Head", tag="brow"))
     # muzzle base: broad where it meets the cheeks
-    P.append(Ellipsoid(V(0, -0.560, 0.752), V(0.060, 0.040, 0.045), k=0.03, bones="Head", tag="muzzlebase"))
+    P.append(HE(V(0, -0.560, 0.752), V(0.060, 0.040, 0.045), k=0.03, bones="Head", tag="muzzlebase"))
     # muzzle (upper jaw): deep, broad, straight nose bridge; shorter than the skull (3:2)
-    P.append(RoundBox(V(0, -0.598, 0.748), V(0.022, 0.040, 0.016), 0.028, k=0.035, bones=["Head", "Nose"],
-                      tag="muzzle"))
+    P.append(HB(V(0, -0.598, 0.748), V(0.022, 0.040, 0.016), 0.028, k=0.035, bones=["Head", "Nose"],
+                tag="muzzle"))
     # upper lips (flews): full, black, hanging slightly over the lower jaw at the sides
     for sx in (1, -1):
-        P.append(Ellipsoid(V(sx * 0.036, -0.600, 0.722), V(0.022, 0.058, 0.026), k=0.02, bones=["Head", "Nose"],
-                           tag="flew"))
+        P.append(HE(V(sx * 0.036, -0.600, 0.722), V(0.022, 0.058, 0.026), k=0.02, bones=["Head", "Nose"],
+                    tag="flew"))
     # nose leather: broad, black
-    P.append(Ellipsoid(V(0, -0.650, 0.768), V(0.033, 0.020, 0.024), k=0.012, bones="Nose", tag="nose"))
+    P.append(HE(V(0, -0.650, 0.768), V(0.033, 0.020, 0.024), k=0.012, bones="Nose", tag="nose"))
     # lower jaw (mandible + lower lip + chin)
-    P.append(RoundBox(V(0, -0.575, 0.690), V(0.026, 0.058, 0.009), 0.012, k=0.02, bones="Jaw", tag="jaw"))
+    P.append(HB(V(0, -0.575, 0.690), V(0.026, 0.058, 0.009), 0.012, k=0.02, bones="Jaw", tag="jaw"))
     for sx in (1, -1):
-        P.append(RoundCone(V(sx * 0.050, -0.485, 0.705), V(sx * 0.022, -0.620, 0.690), 0.020, 0.013, k=0.02,
-                           bones="Jaw", tag="jaw"))
+        P.append(HC(V(sx * 0.050, -0.485, 0.705), V(sx * 0.022, -0.620, 0.690), 0.020, 0.013, k=0.02,
+                    bones="Jaw", tag="jaw"))
     return P
 
 
@@ -258,9 +311,9 @@ def mouth_cut_prims():
     jaw opens without tearing anything; the tongue and teeth are separate parts inside)."""
     P = []
     # the lip slit: a thin wedge from the commissure (closed) to the front
-    P.append(RoundBox(V(0, -0.595, 0.707), V(0.075, 0.085, 0.0012), 0.0015, k=0.001, op="sub", tag="lipcut"))
+    P.append(HB(V(0, -0.595, 0.707), V(0.075, 0.085, 0.0012), 0.0015, k=0.001, op="sub", tag="lipcut"))
     # oral cavity behind the lips
-    P.append(Ellipsoid(V(0, -0.570, 0.706), V(0.026, 0.078, 0.011), k=0.004, op="sub", tag="oral"))
+    P.append(HE(V(0, -0.570, 0.706), V(0.026, 0.078, 0.011), k=0.004, op="sub", tag="oral"))
     return P
 
 
@@ -285,7 +338,8 @@ def head_field(P):
     """The skin field (all additive body primitives, smooth unions included) at the points P."""
     from sdf import eval_prims
     P = np.atleast_2d(P)
-    lo = np.array([-0.2, -0.75, 0.55]); hi = np.array([0.2, -0.30, 0.95])
+    lo = H(V(0, -0.75, 0.55)) - 0.2; hi = H(V(0, -0.30, 0.95)) + 0.2   # a box around the head (placed)
+    lo[0], hi[0] = -0.2, 0.2
     return eval_prims([p for p in skin_prims() if np.all(p.aabb()[1] > lo) and np.all(p.aabb()[0] < hi)], P)
 
 
@@ -310,8 +364,8 @@ def eye_frame(s):
     1.5 mm proud of the skin surface of the head primitives."""
     if s not in _EYES:
         sx = 1 if s == "L" else -1
-        n = V(sx * 0.42, -0.88, 0.16); n /= np.linalg.norm(n)       # forward and slightly out/up
-        q0 = V(sx * 0.018, -0.515, 0.793)
+        n = Hd(V(sx * 0.42, -0.88, 0.16)); n /= np.linalg.norm(n)   # forward and slightly out/up
+        q0 = H(V(sx * 0.018, -0.515, 0.793))
         surf = ray_to_surface(q0, n)
         c = surf - n * (EYE_R - 0.0015)
         _EYES[s] = (c, n, frame_from(n, (0, 0, 1)))
@@ -379,19 +433,20 @@ def ear_mesh(s, ns=11, nt=15, thick=0.0034):
         t2 = 1 - (1 - it / nt) ** 1.2          # denser near the base fold
         for iu in range(ns + 1):
             y, z = yz(iu / ns, t2)
-            Q.append(V(sx * 0.02, y, z)); T.append(t2)
+            Q.append(H(V(sx * 0.02, y, z))); T.append(t2)
     Q, T = np.array(Q), np.array(T)
+    lat = Hd(V(sx, 0, 0))
     gap = 0.004 + 0.006 * T ** 1.5
     # vectorised bisection with per-point offsets
     lo = np.zeros(len(Q)); hi = np.full(len(Q), 0.2)
     for _ in range(40):
         m = (lo + hi) / 2
-        inside = head_field(Q + V(sx, 0, 0) * m[:, None]) < gap
+        inside = head_field(Q + lat * m[:, None]) < gap
         lo = np.where(inside, m, lo); hi = np.where(inside, hi, m)
-    P = Q + V(sx, 0, 0) * lo[:, None]
-    P = P + np.stack([sx * 0.004 * T ** 2, -0.004 * T ** 2, 0 * T], axis=1)      # the tip hangs free a little
-    rows_out = P + V(sx * thick / 2, 0, 0)
-    rows_in = P - V(sx * thick / 2, 0, 0)
+    P = Q + lat * lo[:, None]
+    P = P + np.stack([sx * 0.004 * T ** 2, -0.004 * T ** 2, 0 * T], axis=1) @ RH.T   # the tip hangs free a little
+    rows_out = P + lat * thick / 2
+    rows_in = P - lat * thick / 2
     W = T
     nu = ns + 1
     verts = np.concatenate([rows_out, rows_in])
@@ -474,21 +529,21 @@ def teeth_prims():
     zu, zl = 0.716, 0.697          # upper / lower gum line (the lip slit is at 0.707; tips stay inside the lips)
     for sx in (1, -1):
         # upper canine hangs down in front of the lower canine
-        P.append(RoundCone(V(sx * 0.024, -0.626, zu + 0.004), V(sx * 0.023, -0.628, zu - 0.011), 0.0045, 0.0012,
+        P.append(HC(V(sx * 0.024, -0.626, zu + 0.004), V(sx * 0.023, -0.628, zu - 0.011), 0.0045, 0.0012,
                            k=0.0, bones="Head", tag="tooth"))
-        P.append(RoundCone(V(sx * 0.020, -0.614, zl - 0.004), V(sx * 0.022, -0.616, zl + 0.010), 0.0042, 0.0011,
+        P.append(HC(V(sx * 0.020, -0.614, zl - 0.004), V(sx * 0.022, -0.616, zl + 0.010), 0.0042, 0.0011,
                            k=0.0, bones="Jaw", tag="tooth"))
         for i, dx in enumerate((0.004, 0.010, 0.016)):
             y = -0.636 + 0.003 * i
-            P.append(RoundCone(V(sx * dx, y, zu + 0.002), V(sx * dx, y - 0.001, zu - 0.004), 0.0024, 0.0016,
+            P.append(HC(V(sx * dx, y, zu + 0.002), V(sx * dx, y - 0.001, zu - 0.004), 0.0024, 0.0016,
                                k=0.0, bones="Head", tag="tooth"))
             y = -0.628 + 0.003 * i
-            P.append(RoundCone(V(sx * dx * 0.9, y, zl - 0.002), V(sx * dx * 0.9, y - 0.001, zl + 0.004), 0.0022,
+            P.append(HC(V(sx * dx * 0.9, y, zl - 0.002), V(sx * dx * 0.9, y - 0.001, zl + 0.004), 0.0022,
                                0.0015, k=0.0, bones="Jaw", tag="tooth"))
         # carnassials / premolars (a low ridge)
-        P.append(RoundCone(V(sx * 0.027, -0.600, zu), V(sx * 0.031, -0.540, zu - 0.002), 0.0035, 0.0035,
+        P.append(HC(V(sx * 0.027, -0.600, zu), V(sx * 0.031, -0.540, zu - 0.002), 0.0035, 0.0035,
                            k=0.0, bones="Head", tag="tooth"))
-        P.append(RoundCone(V(sx * 0.024, -0.600, zl), V(sx * 0.028, -0.540, zl + 0.002), 0.0032, 0.0032,
+        P.append(HC(V(sx * 0.024, -0.600, zl), V(sx * 0.028, -0.540, zl + 0.002), 0.0032, 0.0032,
                            k=0.0, bones="Jaw", tag="tooth"))
     return P
 
@@ -500,8 +555,8 @@ def tongue_prims():
     bones = ["Tongue1", "Tongue2", "Tongue3"]
     widths = [0.019, 0.020, 0.019, 0.015]
     for i in range(3):
-        a, b = pts[i] + V(0, 0, -0.003), pts[i + 1] + V(0, 0, -0.003)
-        R = frame_from(b - a)
+        a, b = pts[i] + Hd(V(0, 0, -0.003)), pts[i + 1] + Hd(V(0, 0, -0.003))
+        R = frame_from(b - a, Hd(V(0, 0, 1)))
         P.append(Ellipsoid((a + b) / 2, V(widths[i], np.linalg.norm(b - a) / 2 + 0.012, 0.0055), R,
                            k=0.012, bones=bones[i], tag="tongue"))
     return P

@@ -253,7 +253,8 @@ LIP_Z = 0.707          # the lip slit plane (anatomy.mouth_cut_prims)
 def mouth_split(P, W, bones):
     """Hard upper/lower split along the lip line: above the slit -> Head/Nose, below -> Jaw (+tongue region)."""
     bi = {b: i for i, b in enumerate(bones)}
-    x, y, z = P[:, 0], P[:, 1], P[:, 2]
+    Ph = A.H_inv(P)                         # the lip line lives in the head's design frame (anatomy.H)
+    x, y, z = Ph[:, 0], Ph[:, 1], Ph[:, 2]
     region = (np.abs(x) < 0.085) & (y < -0.455) & (z > 0.64) & (z < 0.78)
     fade = np.clip((-0.475 - y) / 0.04, 0, 1) * region            # 0 behind the jaw hinge, 1 at the commissure
     below = np.clip((LIP_Z - z) / 0.003 * 0.5 + 0.5, 0, 1)         # 1 under the slit, 0 above (3 mm ramp)
@@ -329,7 +330,8 @@ def main():
     d_face = eval_prims(skin, fc)
     body_part = np.zeros(len(f), np.int32)
     # inside the uncut skin = mouth cavity / socket walls (only there: decimation also pulls convex areas inward)
-    mouth_box = (np.abs(fc[:, 0]) < 0.07) & (fc[:, 1] < -0.46) & (fc[:, 2] > 0.66) & (fc[:, 2] < 0.76)
+    fh = A.H_inv(fc)
+    mouth_box = (np.abs(fh[:, 0]) < 0.07) & (fh[:, 1] < -0.46) & (fh[:, 2] > 0.66) & (fh[:, 2] < 0.76)
     eyes = np.min([np.linalg.norm(fc - A.eye_frame(s)[0], axis=1) for s in "LR"], axis=0) < 0.02
     body_part[(d_face < -0.0012) & (mouth_box | eyes)] = PART["cut"]
     # nose leather and paw pads by their primitives

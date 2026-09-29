@@ -155,21 +155,25 @@ def paint(P, N, part, owner, noise):
     jit = (noise - 0.5) * 0.018                         # organic edges (m)
     tan = np.zeros(len(P), np.float32)
 
-    ec, en, _ = A.eye_frame("L")
+    # the head markings are laid out in the head's design frame (anatomy.H_inv), so they follow the head placement
+    Ph = A.H_inv(P); Nh = N @ A.RH
+    hy, hz = Ph[:, 1], Ph[:, 2]
+    hax = np.abs(Ph[:, 0])
+    ec = A.H_inv(A.eye_frame("L")[0])
     # 1. spot over each eye (a little medial and above)
-    tan = np.maximum(tan, 1 - sstep(0.75, 1.1, ellip(np.c_[ax, y, z], ec + np.array([-0.004, 0.006, 0.021]),
+    tan = np.maximum(tan, 1 - sstep(0.75, 1.1, ellip(np.c_[hax, hy, hz], ec + np.array([-0.004, 0.006, 0.021]),
                                                      (0.011, 0.012, 0.0085)) + jit * 20))
     # 2. muzzle sides + chin (the bridge stays black): in front of the eyes, below a line sloping to the nose
-    ztop = 0.770 + 0.22 * (y + 0.54)
-    muzzle = sstep(-0.522, -0.545, y + jit * 0.5) * sstep(0.004, -0.006, z - ztop + jit * 0.6)
-    muzzle *= sstep(0.012, 0.022, ax + (z > 0.74) * 0.0)          # the top midline stays black
-    muzzle = np.where(z < 0.712, sstep(-0.50, -0.53, y + jit * 0.5), muzzle)    # lower jaw / chin: tan
-    tan = np.maximum(tan, muzzle * (z > 0.64))
+    ztop = 0.770 + 0.22 * (hy + 0.54)
+    muzzle = sstep(-0.522, -0.545, hy + jit * 0.5) * sstep(0.004, -0.006, hz - ztop + jit * 0.6)
+    muzzle *= sstep(0.012, 0.022, hax)                              # the top midline stays black
+    muzzle = np.where(hz < 0.712, sstep(-0.50, -0.53, hy + jit * 0.5), muzzle)    # lower jaw / chin: tan
+    tan = np.maximum(tan, muzzle * (hz > 0.64))
     # 3. cheeks under the eyes, 4. throat bib
-    tan = np.maximum(tan, 1 - sstep(0.8, 1.15, ellip(np.c_[ax, y, z], (0.062, -0.508, 0.728), (0.030, 0.042, 0.030))
+    tan = np.maximum(tan, 1 - sstep(0.8, 1.15, ellip(np.c_[hax, hy, hz], (0.062, -0.508, 0.728), (0.030, 0.042, 0.030))
                                     + jit * 18))
-    throat = 1 - sstep(0.8, 1.15, ellip(P, (0, -0.495, 0.650), (0.050, 0.075, 0.040)) + jit * 18)
-    tan = np.maximum(tan, throat * (N[:, 2] < 0.3))
+    throat = 1 - sstep(0.8, 1.15, ellip(Ph, (0, -0.495, 0.650), (0.050, 0.075, 0.040)) + jit * 18)
+    tan = np.maximum(tan, throat * (Nh[:, 2] < 0.3))
     # 5. two triangles on the forechest (inverted, either side of the midline)
     u, v = ax, z
     def tri_mask(pa, pb, pc, soft=0.006):
@@ -209,8 +213,8 @@ def paint(P, N, part, owner, noise):
     col = black * (1 - tan)[:, None] + tanc * tan[:, None]
     rough = 0.52 * (1 - tan) + 0.66 * tan
     # black lip line and the rim of the eyelids
-    lip = sstep(0.0075, 0.004, np.abs(z - 0.707)) * (y < -0.47) * (ax < 0.07)
-    lid = sstep(0.0045, 0.002, np.abs(np.linalg.norm(np.c_[ax, y, z] - ec, axis=1) - 0.0145))
+    lip = sstep(0.0075, 0.004, np.abs(hz - 0.707)) * (hy < -0.47) * (hax < 0.07)
+    lid = sstep(0.0045, 0.002, np.abs(np.linalg.norm(np.c_[hax, hy, hz] - ec, axis=1) - 0.0145))
     k = np.maximum(lip, lid)[:, None]
     col = col * (1 - k) + C_LIP[None] * k
     # parts
@@ -223,9 +227,9 @@ def paint(P, N, part, owner, noise):
     put(part == PART["tooth"], C_TOOTH, 0.25)
     put(part == PART["tongue"], C_TONGUE * (0.85 + 0.3 * noise[:, None]), 0.30)
     cut = part == PART["cut"]
-    near_eye = np.linalg.norm(np.c_[ax, y, z] - ec, axis=1) < 0.022
+    near_eye = np.linalg.norm(np.c_[hax, hy, hz] - ec, axis=1) < 0.022
     # mouth: black gum margin at the lip line, pink-red inside; the eye socket walls dark
-    gum = np.where((np.abs(z - 0.707) < 0.004)[:, None], C_GUM_DK[None], C_GUM[None] * (0.8 + 0.4 * noise[:, None]))
+    gum = np.where((np.abs(hz - 0.707) < 0.004)[:, None], C_GUM_DK[None], C_GUM[None] * (0.8 + 0.4 * noise[:, None]))
     col = np.where((cut & ~near_eye)[:, None], gum, col); rough = np.where(cut & ~near_eye, 0.35, rough)
     put(cut & near_eye, C_GUM_DK, 0.3)
     ear_in = (part == PART["ear"]) & (np.sign(N[:, 0]) != np.sign(x))
