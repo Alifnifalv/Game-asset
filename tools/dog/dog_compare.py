@@ -78,16 +78,17 @@ def setup_scene(src):
     w = bpy.data.worlds.new("W"); sc.world = w; w.use_nodes = True
     bg = w.node_tree.nodes["Background"]
     bg.inputs[0].default_value = (0.60, 0.60, 0.72, 1)     # the GiM studio lavender
-    bg.inputs[1].default_value = 0.9
+    bg.inputs[1].default_value = 1.1
     bpy.ops.mesh.primitive_plane_add(size=30, location=(0, 0, 0))
     g = bpy.data.materials.new("ground"); g.use_nodes = True
     g.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.55, 0.55, 0.66, 1)
     g.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.9
     bpy.context.object.data.materials.append(g)
     bpy.ops.object.light_add(type="SUN", rotation=(math.radians(40), math.radians(-10), math.radians(-35)))
-    bpy.context.object.data.energy = 3.2
+    bpy.context.object.data.energy = 0.6           # soft key: GiM's shadows are shallow
     bpy.context.object.data.angle = math.radians(12)
     sc.render.engine = "CYCLES"; sc.cycles.device = "CPU"
+    sc.view_settings.view_transform = "Standard"   # AgX (Blender 5's default) greys the colours against the GiM frames
     sc.cycles.use_denoising = True
     cam_d = bpy.data.cameras.new("cam"); cam = bpy.data.objects.new("cam", cam_d); sc.collection.objects.link(cam)
     sc.camera = cam

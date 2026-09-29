@@ -83,7 +83,10 @@ paw = None
 if arm and "FrontFoot.L" in arm.pose.bones:
     paw = arm.matrix_world @ arm.pose.bones["FrontFoot.L"].tail
 if head is None:        # no rig (an SDF preview): the anatomy's rest positions
-    head = Vector((0, -0.575, 0.775))
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import numpy as np
+    import anatomy as A                      # the head placement (anatomy.H) moves the head close-ups with it
+    head = Vector(A.H(np.array((0, -0.575, 0.775))))
 if paw is None:
     paw = Vector((0.094, -0.29, 0.03))
 
