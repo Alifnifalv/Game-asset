@@ -1,18 +1,18 @@
 {
  "source": "/home/user/Game-asset/build/dog/stage_d.blend",
- "source_mtime": "2026-09-29T09:24:57",
- "exported": "2026-09-29T09:24:57",
+ "source_mtime": "2026-09-29T17:37:48",
+ "exported": "2026-09-29T17:37:48",
  "blender": "5.0.1",
  "files": {
-  "Rottweiler.glb": 11174200,
-  "Rottweiler.fbx": 13900044,
-  "Textures/T_RottweilerEye_BaseColor.png": 191637,
-  "Textures/T_Rottweiler_AO.png": 1685091,
-  "Textures/T_Rottweiler_BaseColor.png": 8007343,
-  "Textures/T_Rottweiler_MaskMap.png": 2637027,
-  "Textures/T_Rottweiler_MetallicSmoothness.png": 435367,
-  "Textures/T_Rottweiler_Normal.png": 14537862,
-  "Textures/T_Rottweiler_Roughness.png": 305704
+  "Rottweiler.glb": 15275264,
+  "Rottweiler.fbx": 13957036,
+  "Textures/T_RottweilerEye_BaseColor.png": 150411,
+  "Textures/T_Rottweiler_AO.png": 1632923,
+  "Textures/T_Rottweiler_BaseColor.png": 11922437,
+  "Textures/T_Rottweiler_MaskMap.png": 8482289,
+  "Textures/T_Rottweiler_MetallicSmoothness.png": 6783811,
+  "Textures/T_Rottweiler_Normal.png": 16665259,
+  "Textures/T_Rottweiler_Roughness.png": 4411430
  },
  "glb": {
   "objects": [
@@ -166,27 +166,27 @@
  "non_deforming_bones_kept": [],
  "lods": {
   "Rottweiler_LOD0": {
-   "tris": 45594,
-   "verts": 23019,
-   "polys": 45594,
+   "tris": 46848,
+   "verts": 23600,
+   "polys": 46848,
    "materials": [
     "M_Rottweiler_Eye",
     "M_Rottweiler_Body"
    ]
   },
   "Rottweiler_LOD1": {
-   "tris": 11008,
-   "verts": 5726,
-   "polys": 11008,
+   "tris": 10992,
+   "verts": 5672,
+   "polys": 10992,
    "materials": [
     "M_Rottweiler_Eye",
     "M_Rottweiler_Body"
    ]
   },
   "Rottweiler_LOD2": {
-   "tris": 3114,
-   "verts": 1779,
-   "polys": 3114,
+   "tris": 3106,
+   "verts": 1729,
+   "polys": 3106,
    "materials": [
     "M_Rottweiler_Eye",
     "M_Rottweiler_Body"
@@ -195,7 +195,7 @@
  },
  "weights": {
   "Rottweiler_LOD0": {
-   "verts": 23019,
+   "verts": 23600,
    "max_before": 4,
    "max_after": 4,
    "over_limit": 0,
@@ -206,7 +206,7 @@
    "ngons_triangulated": 0
   },
   "Rottweiler_LOD1": {
-   "verts": 5726,
+   "verts": 5672,
    "max_before": 4,
    "max_after": 4,
    "over_limit": 0,
@@ -217,7 +217,7 @@
    "ngons_triangulated": 0
   },
   "Rottweiler_LOD2": {
-   "verts": 1779,
+   "verts": 1729,
    "max_before": 4,
    "max_after": 4,
    "over_limit": 0,

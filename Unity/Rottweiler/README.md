@@ -26,9 +26,9 @@ exporter); this file lists the Rottweiler's rig, clips and Animator.
 ```
 Rottweiler              model root (Unity adds the LODGroup here)
 ├─ RottweilerRig        armature node: identity transform, scale 1; Root = the Avatar's root (root-motion) bone
-├─ Rottweiler_LOD0      SkinnedMeshRenderer, 45,594 tris
-├─ Rottweiler_LOD1      SkinnedMeshRenderer, 11,008 tris
-└─ Rottweiler_LOD2      SkinnedMeshRenderer,  3,114 tris
+├─ Rottweiler_LOD0      SkinnedMeshRenderer, 46,848 tris
+├─ Rottweiler_LOD1      SkinnedMeshRenderer, 10,992 tris
+└─ Rottweiler_LOD2      SkinnedMeshRenderer,  3,106 tris
 ```
 - Faces **+Z**, Y up, meters, stands on y = 0. Withers 0.66 m (FCI standard for a male: 61-68 cm), head top 0.89 m,
   **1.175 m long** (nose to the hanging tail), **0.889 m high**, **0.390 m wide**; trunk 0.74 m (point of shoulder to

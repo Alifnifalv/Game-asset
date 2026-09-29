@@ -153,8 +153,15 @@ python3 tools/dog/dog_animations.py   # every tools/dog/clips/*.py family, QA GA
 ```
 - **Anatomy** (`anatomy.py`): joints `J` (meters, faces -Y, withers 0.66 m, authored at final size: no scale stage) and the
   SDF primitives, each tagged with its bone(s); the skin weights come from those tags (soft-min of the primitive distances,
-  chains split along their bones), the lip line is split hard between Head and Jaw. Change the shape there, then rebuild.
+  chains split along their bones), the lip line is split hard between Head and Jaw (`lip_z`). Change the shape there, then
+  rebuild. **Head design frame:** every head primitive, the head joints, eyes, ears, teeth and tongue are authored in design
+  coordinates and placed by `H(p) = HEAD_POS + HEAD_SCALE * RH @ (p - ATLAS0)` (`HEAD_POS` = the atlas = the head carriage,
+  `HEAD_PITCH` + = nose down, `HEAD_SCALE` 1.05); `H_inv` maps back (stage A lip split, the texture's head markings). Poses
+  that set the neck/head explicitly carry the carriage compensation Neck1 -6, Neck2 -4 (`clips/_common.py`).
   `sdf_preview.py` (5 s) + `dog_views.py` (clay contact sheet: side/front/back/top/3-4/head/paw) for shape work.
+  **Likeness:** `dog_compare.py <stage_d.blend> <out>` renders GiM reference | ours pairs (14 presets: video frames and
+  stills; fair lighting) and `preview.sh <scratch>` runs A-D with 1K textures plus the comparisons (~4 min). One likeness
+  round was done (checkpoint 05; the user asked for one round only).
 - **Face attribute `part`**: 0 coat, 1 mouth interior / eye socket (cut surfaces), 2 claw, 3 nose leather, 4 eyeball,
   5 paw pad, 6 tooth, 7 tongue, 8 ear. Materials `[0] M_Rottweiler_Body`, `[1] M_Rottweiler_Eye`.
 - **Rig**: `Root` > `Hips` > `Spine1-3` > `Neck1-2` > `Head` > `Nose`, `Jaw` > `Tongue1-3`, `Ear1/2.X`, `Eye.X`;
@@ -168,7 +175,8 @@ python3 tools/dog/dog_animations.py   # every tools/dog/clips/*.py family, QA GA
   `reach_pass` lowers the body where a paw is out of reach (reported as "body drop"); leg planes are kept continuous frame
   to frame. `Pose()` = rest (self-test 1e-6). Signs: `rot(pitch, yaw, roll)` pitch + = tip down (forward bone) / back-up
   (hanging bone), yaw + = to the dog's left; `pastern` + = the lower end swings back (carpus flexion; for the HOCK flexion is
-  **negative**: the paw swings forward); `toe` + = tip down; `jaw` + = open; `local` 0..1 = paw angles in the ground or
+  **negative**: the paw swings forward); `toe` + = tip down; `jaw` + = open (`local["Jaw"] = rot(P.jaw)`); `ears` pitch
+  + = ears back, applied as a swing back and out (yaw + roll, mirrored) so the folded flap never enters the skull; `local` 0..1 = paw angles in the ground or
   the body frame (a body rolled onto its side). `_common.timeline` blends key poses and lifts stepping paws.
 - **Fast QA** (5-10 s): `ASSET=dog python3 tools/dog/dog_animations.py --in build/dog/stage_c.blend --out <scratch>/d.blend
   [--only locomotion,idles,sit_lie,actions]`; each family also runs standalone: `python3 tools/dog/clips/<family>.py --in
@@ -179,10 +187,11 @@ python3 tools/dog/dog_animations.py   # every tools/dog/clips/*.py family, QA GA
   <= 12 deg per frame (the validator FAILs 15), LOD2 body and paws >= -2 cm.
 - The validator reads the dog's key bones / limb regex / clip boundaries / size window from `AP.IS_DOG`
   (`validate_export.py`, after `STANDING_ENDS`).
-- **Gate for the dog:** as below, with `build/dog/logs/` and the dog QA gate. First build (checkpoint 04): `QA GATE: pass
-  (25 clips)`, validator **264 PASS / 0 FAIL / 0 WARN**, `T_Rottweiler_BaseColor` 4096. Stage B stops on a degenerate
-  MikkTSpace tangent (a UV fold in a decimated LOD; stage A decimates LOD2 from LOD1 and repairs folds). Known values:
-  body drop Walk 1.3 mm, Trot 15 mm, Gallop 67 mm (OI-51); leg twist max 11.4 deg/f (Death).
+- **Gate for the dog:** as below, with `build/dog/logs/` and the dog QA gate. Likeness build (checkpoint 05, about 6.5 min:
+  textures 201 s): `QA GATE: pass (25 clips)`, validator **264 PASS / 0 FAIL / 0 WARN**, `T_Rottweiler_BaseColor` 4096,
+  LODs 46,848 / 10,992 / 3,106 tris. Stage B stops on a degenerate MikkTSpace tangent (a UV fold in a decimated LOD; stage
+  A decimates LOD2 from LOD1 and repairs folds). Known values: body drop Walk 0, Trot 9.8 mm, Gallop 66.8 mm (OI-51); leg
+  twist max 10.9 deg/f (Death); Death LOD2 paws -1.77 cm (close to the -2 cm gate).
 
 ## Verification gate
 A state is **verified-good** (and may become a checkpoint) when:
