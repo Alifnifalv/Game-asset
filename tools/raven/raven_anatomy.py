@@ -1,0 +1,440 @@
+"""Common raven (Corvus corax) anatomy: bind-pose skeleton joints, the bone table, and the SDF primitives of the body.
+
+Conventions (as the other assets): meters, Z up, the bird faces -Y, ground z = 0, '.L' = +X (the bird's left).
+Size and shape follow the reference spec (docs/raven_reference.md; GiM "Animalia - Raven"): total length bill tip to tail
+tip 0.62 m, crown 0.389 m, span 1.08 m, back line 31 deg front-up.
+
+BIND POSE: the trunk, head, legs and tail stand as in the standing idle (spec 2.2), the wings are SPREAD (the glide
+planform of spec 2.3/4.2) in the plane that contains +X and the spine direction U_WING (32 deg down-back), so the flight
+feathers can be modelled flat. Every ground clip folds the wings through the animation library.
+
+Every primitive carries the bone (or bone chain) it moves with; raven_stage_a.py derives the skin weights from them. The
+module is named raven_anatomy (not anatomy) so it never shadows tools/dog/anatomy.py on sys.path.
+"""
+import os, sys
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dog"))
+from sdf import Sphere, Ellipsoid, ellipsoid_seg, RoundCone, RoundBox, frame_from    # noqa: E402
+
+V = lambda *a: np.array(a, dtype=float)
+
+
+def mirror(p):
+    p = np.array(p, dtype=float); p[..., 0] = -p[..., 0]; return p
+
+
+def unit(v):
+    v = np.asarray(v, float); return v / np.linalg.norm(v)
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Wing plane (spec 2.3): x = distance from the midline, y = distance behind the shoulder along U_WING
+# --------------------------------------------------------------------------------------------------------------------
+U_WING = V(0, 0.848, -0.530)                  # spine direction, back-down
+N_WING = V(0, 0.530, 0.848)                   # dorsal normal of the spread wing
+WING_O = V(0, -0.094, 0.264)                  # shoulder station on the midline
+
+
+def wp(x, y, s="L", h=0.0):
+    """wing-plane (x, y) [+ h along the dorsal normal] -> bird frame, side s"""
+    p = V(x, 0, 0) + WING_O + U_WING * y + N_WING * h
+    return p if s == "L" else mirror(p)
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Joints (left side for paired joints). Spec 2.2 (standing) + 2.3 (spread wing).
+# --------------------------------------------------------------------------------------------------------------------
+J = {
+    "hips": V(0, 0.000, 0.220),
+    "spine1": V(0, -0.028, 0.239),
+    "spine2": V(0, -0.058, 0.259),
+    "neck1": V(0, -0.098, 0.285),
+    "neck2": V(0, -0.140, 0.318),
+    "neck3": V(0, -0.180, 0.336),
+    "atlas": V(0, -0.211, 0.342),
+    "billbase": V(0, -0.246, 0.366),         # culmen feather base (Head tail)
+    "quadrate": V(0, -0.224, 0.336),         # Jaw head
+    "jawtip": V(0, -0.300, 0.320),
+    "billtip": V(0, -0.304, 0.321),
+    "rictus": V(0.013, -0.238, 0.340),
+    "eye": V(0.021, -0.233, 0.354),
+    "throat0": V(0, -0.228, 0.318),
+    "throat1": V(0, -0.205, 0.275),
+    "tailbase": V(0, 0.032, 0.202),
+    "pyg": V(0, 0.060, 0.186),
+    "tailtip": V(0, 0.263, 0.069),
+    # wing, spread (bind) pose
+    "scap": V(0.012, -0.070, 0.268),          # Shoulder bone head (scapula / coracoid, near the spine)
+    "shoulder": wp(0.040, 0.000),
+    "elbow": wp(0.120, 0.032),
+    "wrist": wp(0.222, -0.016),
+    "handtip": wp(0.296, 0.000),
+    # leg
+    "hip": V(0.026, -0.005, 0.197),
+    "knee": V(0.045, -0.0455, 0.160),
+    "ankle": V(0.040, 0.019, 0.077),
+    "mtp": V(0.042, 0.000, 0.012),
+}
+
+# toes: (name, joints from the MTP to the claw base, claw tip).  Toe III (middle) measured; II / IV / I from their claw
+# tips and lengths (spec 2.2, 3.7): II 22 deg inward of III, IV 22 deg outward, the hallux straight back.
+TOE_Z = 0.006            # toe axis height (toes 6-7 mm thick at the base, 4 mm at the tip)
+
+
+def _toe(dir_xy, lens, claw, z=TOE_Z):
+    d = unit(V(dir_xy[0], dir_xy[1], 0))
+    p = [V(J["mtp"][0], J["mtp"][1], z)]
+    for L in lens:
+        p.append(p[-1] + d * L)
+    tip = p[-1] + d * claw * 0.9 + V(0, 0, -z + 0.002)
+    return p, tip
+
+
+def _rotz(v, deg):
+    a = np.radians(deg); c, s = np.cos(a), np.sin(a)
+    return V(c * v[0] - s * v[1], s * v[0] + c * v[1], v[2])
+
+
+_D3 = unit(V(0.008, -0.054, 0))                        # toe III direction (turned out 8 deg)
+TOES = {
+    "Toe3": _toe(_D3, (0.017, 0.013, 0.024), 0.023),                 # middle: phalanges 17/13/12/12 mm (2 bones)
+    "Toe2": _toe(_rotz(_D3, -22), (0.020, 0.018), 0.018),            # inner (toward the midline: -X for .L)
+    "Toe4": _toe(_rotz(_D3, 22), (0.022, 0.019), 0.017),             # outer
+    "Toe1": _toe(unit(V(-0.10, 1.0, 0)), (0.013, 0.012), 0.021),     # hallux, back and 10 deg toward the midline
+}
+# note: _rotz(+) turns toward +X (outward for the left foot)
+
+
+def side(name, s):
+    p = J[name]
+    return p.copy() if s == "L" else mirror(p)
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Flight-feather table (spec 4.3), wing plane of the LEFT wing: (base x, base y), (tip x, tip y), build length, full
+# width, outer-vane share, emargination (outer, from the tip) ; secondaries and tertials likewise.
+# --------------------------------------------------------------------------------------------------------------------
+REMIGES = [
+    # name     base            tip              len    width  outer  emarg(from tip)  bone parent
+    ("Prim10", (0.296, 0.008), (0.437, 0.008), 0.140, 0.022, 0.30, None, "Hand"),
+    ("Prim09", (0.288, 0.006), (0.507, 0.027), 0.225, 0.035, 0.27, 0.100, "Hand"),
+    ("Prim08", (0.279, 0.004), (0.540, 0.090), 0.275, 0.037, 0.27, 0.100, "Hand"),
+    ("Prim07", (0.271, 0.003), (0.539, 0.151), 0.300, 0.038, 0.28, 0.090, "Hand"),
+    ("Prim06", (0.263, 0.001), (0.516, 0.185), 0.310, 0.040, 0.28, 0.075, "Hand"),
+    ("Prim05", (0.255, -0.001), (0.487, 0.209), 0.305, 0.038, 0.30, 0.050, "Hand"),
+    ("Prim04", (0.247, -0.003), (0.454, 0.221), 0.295, 0.037, 0.35, None, "Hand"),
+    ("Prim03", (0.238, -0.004), (0.399, 0.215), 0.270, 0.037, 0.35, None, "Hand"),
+    ("Prim02", (0.230, -0.006), (0.340, 0.210), 0.240, 0.037, 0.35, None, "Hand"),
+    ("Prim01", (0.222, -0.008), (0.289, 0.214), 0.230, 0.037, 0.35, None, "Hand"),
+    ("Sec1", (0.222, -0.004), (0.266, 0.216), 0.225, 0.043, 0.40, None, "Forearm"),
+    ("Sec2", (0.205, 0.004), (0.244, 0.218), 0.220, 0.043, 0.40, None, "Forearm"),
+    ("Sec3", (0.188, 0.012), (0.222, 0.217), 0.210, 0.043, 0.40, None, "Forearm"),
+    ("Sec4", (0.171, 0.020), (0.195, 0.215), 0.200, 0.043, 0.40, None, "Forearm"),
+    ("Sec5", (0.154, 0.028), (0.168, 0.213), 0.190, 0.043, 0.40, None, "Forearm"),
+    ("Sec6", (0.137, 0.036), (0.141, 0.210), 0.180, 0.044, 0.40, None, "Forearm"),
+    ("Tert1", (0.098, 0.040), (0.114, 0.208), 0.170, 0.045, 0.45, None, "UpperArm"),
+    ("Tert2", (0.076, 0.036), (0.087, 0.207), 0.170, 0.045, 0.47, None, "UpperArm"),
+    ("Tert3", (0.054, 0.032), (0.060, 0.212), 0.175, 0.045, 0.50, None, "UpperArm"),
+]
+# dorsal stacking (spec 4.7): T3 on top ... S1, P1 ... P10 lowest; LAYER_STEP between neighbours (along N_WING)
+REMEX_ORDER = ["Tert3", "Tert2", "Tert1", "Sec6", "Sec5", "Sec4", "Sec3", "Sec2", "Sec1",
+               "Prim01", "Prim02", "Prim03", "Prim04", "Prim05", "Prim06", "Prim07", "Prim08", "Prim09", "Prim10"]
+LAYER_STEP = 0.0010
+
+# rectrices (spec 4.8): R1 (central) .. R6 (outer); length from the pygostyle, width, glide / closed angle (deg)
+RECTRICES = [(0.234, 0.050, 3, 0.5), (0.230, 0.050, 9, 1.0), (0.223, 0.049, 15, 1.5), (0.214, 0.047, 21, 2.5),
+             (0.204, 0.045, 28, 3.0), (0.191, 0.042, 36, 4.0)]
+TAIL_BIND_SPREAD = 0.5          # bind pose: the fan half way between closed (0) and the glide spread (1)
+TAIL_DIR = unit(J["tailtip"] - J["pyg"])
+
+
+def rectrix_angle(i, spread):
+    """rachis angle from the midline (deg) of rectrix i (0 = R1) at a spread 0 (closed) .. 1 (glide fan)"""
+    g, c = RECTRICES[i][2], RECTRICES[i][3]
+    return c + (g - c) * spread
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Bones: name -> (head, tail, parent, up) ; `up` = the direction local +Z should point to (roll), None = world up rule
+# --------------------------------------------------------------------------------------------------------------------
+def remex_frame(name, s="L"):
+    """base point, rachis direction, dorsal normal of a remex in the bind pose (layer offset applied)"""
+    row = next(r for r in REMIGES if r[0] == name)
+    (bx, by), (tx, ty) = row[1], row[2]
+    k = REMEX_ORDER.index(name)
+    h = -k * LAYER_STEP + 0.004                   # 4 mm above the wing-plane (bone line) at the top of the stack
+    b = wp(bx, by, s, h)
+    t = wp(tx, ty, s, h)
+    d = unit(t - b)
+    n = N_WING.copy()
+    return b, d, n
+
+
+def bone_table():
+    B = {}
+    B["Root"] = (V(0, 0, 0), V(0, -0.08, 0), None, V(0, 0, 1))
+    B["Hips"] = (J["hips"], J["spine1"], "Root", None)
+    B["Spine1"] = (J["spine1"], J["spine2"], "Hips", None)
+    B["Spine2"] = (J["spine2"], J["neck1"], "Spine1", None)
+    B["Neck1"] = (J["neck1"], J["neck2"], "Spine2", None)
+    B["Neck2"] = (J["neck2"], J["neck3"], "Neck1", None)
+    B["Neck3"] = (J["neck3"], J["atlas"], "Neck2", None)
+    B["Head"] = (J["atlas"], J["billbase"], "Neck3", None)
+    B["Jaw"] = (J["quadrate"], J["jawtip"], "Head", None)
+    B["Throat"] = (J["throat0"], J["throat1"], "Head", V(0, -1, 0))
+    B["TailBase"] = (J["tailbase"], J["pyg"], "Hips", None)
+    B["Tail"] = (J["pyg"], J["pyg"] + TAIL_DIR * 0.04, "TailBase", None)
+    for s in "LR":
+        sx = 1.0 if s == "L" else -1.0
+        e = side("eye", s)
+        B[f"Eye.{s}"] = (e, e + V(sx * 0.012, 0, 0), "Head", V(0, 0, 1))
+        B[f"Lid.{s}"] = (e, e + V(0, -0.012, 0), "Head", V(0, 0, 1))
+        B[f"Shoulder.{s}"] = (side("scap", s), side("shoulder", s), "Spine2", None)
+        B[f"UpperArm.{s}"] = (side("shoulder", s), side("elbow", s), f"Shoulder.{s}", N_WING)
+        B[f"Forearm.{s}"] = (side("elbow", s), side("wrist", s), f"UpperArm.{s}", N_WING)
+        B[f"Hand.{s}"] = (side("wrist", s), side("handtip", s), f"Forearm.{s}", N_WING)
+        B[f"Alula.{s}"] = (side("wrist", s) + N_WING * 0.006, wp(0.262, -0.030, s, 0.006), f"Hand.{s}", N_WING)
+        for name, *_rest, par in REMIGES:
+            b, d, n = remex_frame(name, s)
+            B[f"{name}.{s}"] = (b, b + d * 0.05, f"{par}.{s}", n)
+        for i in range(6):
+            b, d, n = rectrix_frame(i, s, TAIL_BIND_SPREAD)
+            B[f"Rect{i + 1}.{s}"] = (b, b + d * 0.05, "Tail", n)
+        B[f"Thigh.{s}"] = (side("hip", s), side("knee", s), "Hips", None)
+        B[f"Shin.{s}"] = (side("knee", s), side("ankle", s), f"Thigh.{s}", None)
+        B[f"Tarsus.{s}"] = (side("ankle", s), side("mtp", s), f"Shin.{s}", None)
+        for toe, (pts, tip) in TOES.items():
+            P = [p if s == "L" else mirror(p) for p in pts]
+            B[f"{toe}a.{s}"] = (P[0], P[1], f"Tarsus.{s}", V(0, 0, 1))
+            B[f"{toe}b.{s}"] = (P[1], P[-1], f"{toe}a.{s}", V(0, 0, 1))
+    return B
+
+
+def rectrix_frame(i, s, spread):
+    """base, direction, dorsal normal of rectrix i (0 = R1) on side s at a tail spread"""
+    sx = 1.0 if s == "L" else -1.0
+    ang = np.radians(rectrix_angle(i, spread)) * sx
+    # the tail plane: contains TAIL_DIR and +X; the fan rotates about the plane normal
+    nt = unit(np.cross(V(1, 0, 0), TAIL_DIR))          # dorsal normal of the tail plane
+    if nt[2] < 0:
+        nt = -nt
+    x = V(1, 0, 0)
+    d = unit(TAIL_DIR * np.cos(ang) + x * np.sin(ang))
+    base = J["pyg"] + x * sx * (0.004 + 0.0035 * i) + TAIL_DIR * 0.006 - nt * (0.0010 * i)
+    # tented section: outer feathers about 10 deg lower per side (spec 4.8), via the normal
+    tilt = np.radians(-1.8 * i) * sx
+    n = unit(nt * np.cos(tilt) + x * np.sin(tilt))
+    return base, d, n
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# SDF body.  Bone tags: a name or a chain (list); the stage A weights split a chain along its bones.
+# --------------------------------------------------------------------------------------------------------------------
+TRUNK = ["Hips", "Spine1", "Spine2"]
+NECK = ["Spine2", "Neck1", "Neck2", "Neck3", "Head"]
+
+
+def tube(points, rx, rz, up=(0, 0, 1), k=0.006, extra=0.35, **kw):
+    """a smooth tapered tube: one ellipsoid per segment (radii interpolated), overlapping by `extra` of the radius"""
+    P = []
+    for i in range(len(points) - 1):
+        a, b = np.asarray(points[i], float), np.asarray(points[i + 1], float)
+        r1 = 0.5 * (rx[i] + rx[i + 1]); r2 = 0.5 * (rz[i] + rz[i + 1])
+        P.append(ellipsoid_seg(a, b, r1, r2, up=up, extra=extra * min(r1, r2), k=k, **kw))
+    return P
+
+
+def trunk_prims():
+    P = []
+    u = unit(V(0, 0.848, -0.530))               # spine direction (back-down)
+    nrm = unit(V(0, 0.530, 0.848))
+    R = np.stack([V(1, 0, 0), u, nrm], axis=1)
+    # the main trunk: dorsal line (-0.007, 0.262), belly (-0.079, 0.130), 0.12 wide below the wings
+    P.append(Ellipsoid(V(0, -0.050, 0.200), V(0.050, 0.128, 0.074), R, k=0.0, bones=TRUNK, tag="trunk"))
+    # breast: fullest forward point (-0.188, 0.231)
+    P.append(Ellipsoid(V(0, -0.132, 0.212), V(0.050, 0.058, 0.060), R, k=0.030, bones=["Spine2"], tag="breast"))
+    # mantle / shoulders (the back is broad where the folded wings sit)
+    P.append(Ellipsoid(V(0, -0.070, 0.262), V(0.044, 0.070, 0.030), R, k=0.030, bones=["Spine2"], tag="mantle"))
+    # belly and vent fluff
+    P.append(Ellipsoid(V(0, -0.010, 0.128), V(0.046, 0.070, 0.036), R, k=0.030, bones=["Hips"], tag="belly"))
+    P.append(Ellipsoid(V(0, 0.056, 0.118), V(0.034, 0.040, 0.026), R, k=0.025, bones=["Hips", "TailBase"], tag="vent"))
+    # rump / uropygium to the pygostyle
+    P += tube([V(0, 0.000, 0.215), V(0, 0.060, 0.190), V(0, 0.100, 0.172)], [0.040, 0.030, 0.018],
+              [0.032, 0.024, 0.012], up=nrm, k=0.020, bones=["Hips", "TailBase", "Tail"], tag="rump")
+    # undertail coverts: end (0.155, 0.113), 1-1.5 cm below the tail underside
+    P += tube([V(0, 0.070, 0.128), V(0, 0.115, 0.118), V(0, 0.150, 0.118)], [0.022, 0.018, 0.010],
+              [0.016, 0.012, 0.006], up=nrm, k=0.016, bones=["TailBase", "Tail"], tag="undertail")
+    return P
+
+
+def neck_head_prims():
+    P = []
+    # neck: thick (side depth ~0.08 at z 0.30), merging into mantle and head
+    P += tube([J["neck1"] + V(0, 0.005, -0.012), J["neck2"] + V(0, 0.004, -0.008), J["neck3"] + V(0, 0.006, -0.002),
+               J["atlas"] + V(0, 0.012, 0.004)], [0.040, 0.036, 0.031, 0.027], [0.044, 0.040, 0.035, 0.030],
+              k=0.030, bones=NECK[1:], tag="neck")
+    # head: crown (-0.209, 0.389), occiput (-0.168, 0.375), chin (-0.247, 0.324); 0.052 wide at the eyes
+    P.append(Ellipsoid(V(0, -0.212, 0.358), V(0.025, 0.040, 0.030), k=0.018, bones="Head", tag="head"))
+    P.append(Ellipsoid(V(0, -0.203, 0.372), V(0.022, 0.034, 0.018), k=0.012, bones="Head", tag="crown"))
+    # forehead: continues the culmen at ~31 deg
+    P.append(ellipsoid_seg(V(0, -0.244, 0.360), V(0, -0.214, 0.380), 0.017, 0.012, k=0.012, bones="Head", tag="forehead"))
+    # cheeks / ear coverts
+    for sx in (1, -1):
+        P.append(Ellipsoid(V(sx * 0.012, -0.214, 0.345), V(0.014, 0.024, 0.020), k=0.012, bones="Head", tag="cheek"))
+    # chin / throat skin under the hackles (the hackles are feather strips)
+    P += tube([V(0, -0.244, 0.330), V(0, -0.226, 0.312), V(0, -0.200, 0.286), J["neck1"] + V(0, -0.030, -0.040)],
+              [0.013, 0.020, 0.026, 0.034], [0.010, 0.016, 0.022, 0.030], k=0.020,
+              bones=["Head", "Throat", "Neck2", "Neck1"], tag="throat")
+    return P
+
+
+def bill_prims():
+    """upper mandible (Head) and lower mandible (Jaw) as one solid; the gape cut separates them (bill_cut_prims)."""
+    P = []
+    # upper mandible: culmen from the feather base (-0.248, 0.369) straight at 31 deg, then hooked to the tip
+    cul = [V(0, -0.246, 0.352), V(0, -0.262, 0.345), V(0, -0.278, 0.338), V(0, -0.290, 0.332), V(0, -0.298, 0.327)]
+    P += tube(cul, [0.011, 0.0095, 0.0078, 0.0058, 0.0038], [0.0135, 0.0115, 0.0092, 0.0068, 0.0045],
+              k=0.004, extra=0.4, bones="Head", tag="bill")
+    # the hook: the tip (-0.304, 0.321) overhangs the lower mandible by 4 mm
+    P.append(RoundCone(V(0, -0.296, 0.331), V(0, -0.3035, 0.3225), 0.0036, 0.0012, k=0.003, bones="Head", tag="bill"))
+    # lower mandible: gonys nearly straight, rising ~3 deg to the tip (-0.300, 0.320)
+    low = [V(0, -0.240, 0.331), V(0, -0.258, 0.328), V(0, -0.276, 0.326), V(0, -0.292, 0.3225)]
+    P += tube(low, [0.0105, 0.0090, 0.0070, 0.0045], [0.0072, 0.0062, 0.0050, 0.0034], k=0.004, extra=0.4,
+              bones="Jaw", tag="bill_low")
+    P.append(RoundCone(V(0, -0.290, 0.3230), V(0, -0.2995, 0.3210), 0.0032, 0.0014, k=0.003, bones="Jaw", tag="bill_low"))
+    return P
+
+
+def gape_z(y):
+    """z of the tomium (gape line) along the bill (spec 3.4): rictus (-0.238, 0.340) -> (-0.270, 0.334) -> tip 0.325"""
+    y = np.asarray(y, float)
+    return np.interp(-y, [0.230, 0.238, 0.270, 0.300, 0.310], [0.341, 0.340, 0.334, 0.3255, 0.3245])
+
+
+class GapeCut:
+    """thin slab following the gape line from just in front of the rictus to past the tip (subtracted), so the upper
+    and lower mandibles are separate surfaces that the Jaw can open."""
+    op = "sub"; k = 0.0006; bones = None; tag = "gape"; pad = 0.0
+
+    def __init__(self, half=0.0006, y0=-0.2415, y1=-0.312, xmax=0.016):
+        self.half, self.y0, self.y1, self.xmax = half, y0, y1, xmax
+
+    def aabb(self):
+        return V(-self.xmax - 0.004, self.y1 - 0.004, 0.318), V(self.xmax + 0.004, self.y0 + 0.004, 0.346)
+
+    def dist(self, P):
+        # a box in (|x|, y, z - gape(y)): |x| < xmax, y < y0 (from the rictus forward, open past the tip), |dz| < half
+        q = np.stack([np.abs(P[:, 0]) - self.xmax, P[:, 1] - self.y0, np.abs(P[:, 2] - gape_z(P[:, 1])) - self.half], 1)
+        return np.linalg.norm(np.maximum(q, 0), axis=1) + np.minimum(q.max(axis=1), 0)
+
+
+def mouth_prims():
+    return [GapeCut()]
+
+
+def leg_prims(s):
+    P = []
+    j = lambda n: side(n, s)
+    sx = 1 if s == "L" else -1
+    # thigh inside the body + the feathered "trousers" (tibia) down to z 0.067-0.075
+    P.append(ellipsoid_seg(j("hip") + V(sx * 0.004, -0.010, -0.012), j("knee") + V(sx * 0.004, 0.000, -0.010),
+                           0.024, 0.022, k=0.022, bones=[f"Thigh.{s}", f"Shin.{s}"], tag="thigh"))
+    P.append(ellipsoid_seg(j("knee") + V(sx * 0.002, 0.000, -0.004), j("ankle") + V(0, -0.004, 0.002),
+                           0.019, 0.018, extra=0.004, k=0.016, bones=[f"Shin.{s}"], tag="trouser"))
+    # the ankle (intertarsal joint): the trouser feathers end just below it, the bare tarsus starts
+    P.append(Sphere(j("ankle") + V(0, -0.001, 0.001), 0.0068, k=0.008, bones=[f"Shin.{s}", f"Tarsus.{s}"], tag="tarsus"))
+    # bare tarsus: 9 x 6.5 mm mid, 11 mm at the ankle, 10 mm at the MTP
+    P.append(RoundCone(j("ankle"), j("mtp") + V(0, 0, 0.004), 0.0055, 0.0048, k=0.004, bones=f"Tarsus.{s}", tag="tarsus"))
+    # MTP pad
+    P.append(Ellipsoid(j("mtp") + V(0, 0.002, -0.004), V(0.0065, 0.0075, 0.0055), k=0.004, bones=f"Tarsus.{s}", tag="toe"))
+    for toe, (pts, tip) in TOES.items():
+        Q = [p if s == "L" else mirror(p) for p in pts]
+        n = len(Q)
+        for i in range(n - 1):
+            r0 = 0.0033 - 0.0010 * i / max(n - 2, 1)
+            r1 = r0 - 0.0005
+            bone = f"{toe}a.{s}" if i == 0 else f"{toe}b.{s}"
+            P.append(RoundCone(Q[i], Q[i + 1], r0, r1, k=0.0025, bones=bone, tag="toe"))
+            # a bulbous pad under each joint (+5 mm below the MTP line)
+            P.append(Ellipsoid(Q[i + 1] + V(0, 0, -0.0012), V(0.0034, 0.0040, 0.0030), k=0.002, bones=bone, tag="toe"))
+    return P
+
+
+def claw_prims(s):
+    """curved claws (arc 110-130 deg, 5 mm deep at the base, needle tips); rigid on the distal toe bone"""
+    P = []
+    for toe, (pts, tip) in TOES.items():
+        Q = [p if s == "L" else mirror(p) for p in pts]
+        T = tip if s == "L" else mirror(tip)
+        base = Q[-1]
+        d = unit(V(T[0] - base[0], T[1] - base[1], 0))
+        L = np.linalg.norm((T - base)[:2]) + 0.002
+        up = V(0, 0, 1)
+        # a quadratic arc from the base (on the toe axis) over the top to the ground tip
+        c0 = base + up * 0.0005
+        c1 = base + d * L * 0.55 + up * 0.0030
+        c2 = V(T[0], T[1], 0.0006)
+        pts_ = [(1 - t) ** 2 * c0 + 2 * (1 - t) * t * c1 + t * t * c2 for t in np.linspace(0, 1, 6)]
+        rs = np.linspace(0.0024, 0.0004, 6)
+        for i in range(5):
+            P.append(RoundCone(pts_[i], pts_[i + 1], rs[i], rs[i + 1], k=0.0006, bones=f"{toe}b.{s}", tag="claw"))
+    return P
+
+
+def wing_arm_prims(s):
+    """the arm skin in the spread pose: humerus / ulna / hand round cones and the propatagium (leading-edge web),
+    flattened in the wing plane; covered by the coverts (feather strips)."""
+    P = []
+    j = lambda n: side(n, s)
+    ch = [f"UpperArm.{s}", f"Forearm.{s}"]
+    Rw = np.stack([V(1, 0, 0) if s == "L" else V(-1, 0, 0), U_WING, N_WING], axis=1)
+    P.append(RoundCone(j("shoulder") + N_WING * 0.002, j("elbow") + N_WING * 0.002, 0.020, 0.012, k=0.026,
+                       bones=[f"Shoulder.{s}", f"UpperArm.{s}"], tag="arm"))
+    P.append(RoundCone(j("elbow") + N_WING * 0.002, j("wrist") + N_WING * 0.001, 0.012, 0.0075, k=0.010,
+                       bones=[f"UpperArm.{s}", f"Forearm.{s}"], tag="arm"))
+    P.append(RoundCone(j("wrist") + N_WING * 0.001, j("handtip"), 0.0075, 0.0040, k=0.006,
+                       bones=[f"Forearm.{s}", f"Hand.{s}"], tag="arm"))
+    # propatagium: from the leading-edge root (0.010, -0.028) to the wrist; the web between shoulder, elbow and wrist
+    for (x0, y0), (x1, y1), w in (((0.030, -0.018), (0.215, -0.024), 0.012),):
+        a, b = wp(x0, y0, s, 0.001), wp(x1, y1, s, 0.001)
+        c = (a + b) / 2
+        L = np.linalg.norm(b - a) / 2
+        Rl = np.stack([unit(b - a), unit(np.cross(N_WING, unit(b - a))), N_WING], axis=1)
+        P.append(Ellipsoid(c + Rl[:, 1] * 0.010, V(L, 0.022, 0.0045), Rl, k=0.012, bones=ch, tag="patagium"))
+    # the elbow web (behind the arm, over the secondary bases)
+    a, b = wp(0.060, 0.018, s, 0.001), wp(0.200, 0.012, s, 0.001)
+    Rl = np.stack([unit(b - a), unit(np.cross(N_WING, unit(b - a))), N_WING], axis=1)
+    P.append(Ellipsoid((a + b) / 2, V(np.linalg.norm(b - a) / 2, 0.016, 0.0045), Rl, k=0.012, bones=ch, tag="patagium"))
+    return P
+
+
+def body_prims():
+    P = trunk_prims() + neck_head_prims() + bill_prims()
+    for s in "LR":
+        P += leg_prims(s) + wing_arm_prims(s)
+    P += mouth_prims()
+    return P
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Eye: eyeball (Eye.X) with the pale beaded lid ring (part of the head skin texture) and the nictitating membrane
+# (Lid.X, a thin shell over the front of the eyeball that slides across for the blink).
+# --------------------------------------------------------------------------------------------------------------------
+EYE_R = 0.0068           # eyeball radius (visible iris 10 mm, ring 16 mm)
+
+
+def eye_frame(s):
+    c = side("eye", s)
+    sx = 1.0 if s == "L" else -1.0
+    n = unit(V(sx * 0.92, -0.33, 0.15))          # looks out, a little forward and up
+    return c, n
+
+
+def eye_socket_prims():
+    """a shallow recess where the eyeball sits (subtracted from the head)"""
+    P = []
+    for s in "LR":
+        c, n = eye_frame(s)
+        P.append(Sphere(c + n * 0.0015, EYE_R + 0.0006, k=0.0025, op="sub", bones="Head", tag="socket"))
+    return P

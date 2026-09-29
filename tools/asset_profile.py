@@ -14,20 +14,24 @@ Both animals come from cow.glb and share the rig, the clip code and the exporter
   dog   the male Rottweiler: tools/dog/ builds its own mesh (SDF anatomy), rig and clips at final size (no stage E);
         the exporter and the validator are shared. Objects RottweilerRig / Rottweiler_LOD0..2 / M_Rottweiler_Body /
         M_Rottweiler_Eye; output Unity/Rottweiler, intermediates in build/dog/.
+  raven the common raven: tools/raven/ (SDF body + modelled feather strips on per-feather bones, its own rig, textures
+        and clips) at final size; shared exporter and validator. Objects RavenRig / Raven_LOD0..2 / M_Raven_Body /
+        M_Raven_Feather / M_Raven_Eye; output Unity/Raven, intermediates in build/raven/.
 The calf/cow Blender object names stay CalfRig / Calf_LOD0..2 / M_Calf_Body / M_Calf_Eye through stages A-D for both animals
 (every tool relies on them); only stage E renames the cow's.
 """
 import os
 
 ASSET = os.environ.get("ASSET", "calf").strip().lower()
-if ASSET not in ("calf", "cow", "dog"):
-    raise SystemExit(f"ASSET must be 'calf', 'cow' or 'dog' (got {ASSET!r})")
+if ASSET not in ("calf", "cow", "dog", "raven"):
+    raise SystemExit(f"ASSET must be 'calf', 'cow', 'dog' or 'raven' (got {ASSET!r})")
 IS_COW = ASSET == "cow"
 IS_DOG = ASSET == "dog"       # the Rottweiler: its own mesh/rig/clip pipeline (tools/dog/), shared exporter + validator
+IS_RAVEN = ASSET == "raven"   # the raven: its own pipeline (tools/raven/), shared exporter + validator
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NAME = "Cow" if IS_COW else ("Rottweiler" if IS_DOG else "Calf")     # exported file / object prefix
-BUILD = os.path.join(ROOT, "build", ASSET) if (IS_COW or IS_DOG) else os.path.join(ROOT, "build")
+NAME = {"cow": "Cow", "dog": "Rottweiler", "raven": "Raven"}.get(ASSET, "Calf")     # exported file / object prefix
+BUILD = os.path.join(ROOT, "build", ASSET) if ASSET != "calf" else os.path.join(ROOT, "build")
 UNITY_DIR = os.path.join(ROOT, "Unity", NAME)
 TEX = "T_" + NAME                                      # texture prefix: T_Calf_BaseColor / T_Cow_BaseColor
 TEX_EYE = "T_" + NAME + "Eye"
