@@ -54,6 +54,7 @@ import bpy
 import numpy as np
 from mathutils import Vector, Quaternion
 import anim_lib as A
+import asset_profile as AP
 from anim_lib import Pose, LEGS
 
 FPS = 30
@@ -212,6 +213,7 @@ def stand_pose():
 # GRAZE: tuned on the final stage B (smaller head) so the nose pad hangs 2.5-5 cm above the ground through Graze_Loop
 # (LOD0 and LOD2 skinning; lowest in the bites) with the face about vertical, the front end ~1.5 cm lower (body pitch +
 # withers), carpi only slightly more flexed than at rest.
+COW_GRAZE_NECK = (23.3, 26.3, 23.3)               # adult cow (ASSET=cow): nose pad in the same 2.5-5 cm band
 GRAZE_FEET = {"LF": V(0.0, -0.06, 0.0)}           # left fore stepped forward 6 cm (Graze_Start/End step it)
 
 
@@ -221,6 +223,8 @@ def graze_pose():
     P.body_rot = V(1.8, 0.0, 0.0)                  # nose down 1.8 deg about the COG
     P.spine = {"Torso": (-0.6, 0.0, 0.0), "Torso3": (8.0, 0.0, 0.0)}   # withers follow the neck down
     P.neck = [26.5, 29.5, 26.5]                    # (was 22.7/26.2/23.2 for the old, bigger head: nose pad 6.9-9.0 cm up)
+    if AP.IS_COW:                                  # the adult's longer head reaches ~3.5 cm lower: less neck pitch
+        P.neck = list(COW_GRAZE_NECK)
     P.neck_yaw = [1.0, 1.5, 2.0]
     P.head = V(-43.0, 3.0, 2.0)                    # head extends against the neck: Head bone ~92 deg below horizontal
     P.jaw = 0.0

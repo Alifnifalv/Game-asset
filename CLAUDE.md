@@ -1,4 +1,4 @@
-# Game-asset: Young Cow (Calf) for Unity
+# Game-asset: Young Cow (Calf) and Adult Cow for Unity
 
 **Read this first, then `docs/WORKLOG.md` (current status, open issues, chronological log) and `docs/PLAN.md` (scope and phases).**
 `docs/REFERENCES.md` describes the look target, and `docs/anim_lying.md` is the handoff for the lying clips.
@@ -9,6 +9,11 @@ The user decided to **build it in-house**; do not suggest buying the GiM asset.
 Scope: model + 4K PBR textures + LODs + rig + full animation set (walk/trot/gallop/turns, idles, graze, eat,
 lie down / lying idle / get up, death, leap) + Unity import/setup.
 
+**Adult cow (second asset, `Unity/Cow`):** the user asked for the adult cow as well ("cow like cub"). Look target: the
+GiM adult female in `videoplayback.mp4` (a Simmental: red-pied, white head, short horns, udder). It is built by the same
+tools with `ASSET=cow` (`bash tools/build_all.sh --asset cow`); see "Adult cow" below. The calf stays the default: every
+tool behaves exactly as before without `ASSET`.
+
 ## Repo layout
 | Path | What |
 |---|---|
@@ -18,6 +23,8 @@ lie down / lying idle / get up, death, leap) + Unity import/setup.
 | `videoplayback.mp4` | GiM adult female cow animation preview |
 | `tools/` | The whole pipeline, as headless Blender Python scripts (see below). `tools/clips/` holds the key-pose clip families. |
 | `build/` | **gitignored** intermediates (`stage_a..d.blend`, `textures/`, `logs/`, test outputs); regenerate with the tools |
+| `tools/asset_profile.py` | Which animal a run builds (`ASSET=calf` default, `ASSET=cow`): build dir, output dir, texture prefix, final scale. |
+| `build/cow/`, `Unity/Cow/` | The adult cow's intermediates (gitignored) and deliverables (git-tracked: FBX, GLB, `Textures/`, `Editor/CowSetup.cs`, README). |
 | `Unity/Calf/` | Deliverables for Unity (FBX, GLB, textures, `Editor/CalfSetup.cs`, `Fur/`, README with import settings). **Git-tracked**, and rewritten by every full build. |
 | `docs/` | `WORKLOG.md` (status, open issues, log), `PLAN.md` (scope/phases), `REFERENCES.md` (reference files, video timestamp index, the user's close-up spec), `anim_lying.md` (lying family handoff) |
 
@@ -75,7 +82,7 @@ Check tools:
 - `tools/rebake_leg_ik.py`: re-solve leg IK for imported clips.
 
 ### Do not
-- **Do not point experiments at `Unity/Calf/` or `build/`.** `build_all.sh` and `export_unity.py --out-dir Unity/Calf`
+- **Do not point experiments at `Unity/Calf/`, `Unity/Cow/` or `build/` (incl. `build/cow/`).** `build_all.sh` and `export_unity.py --out-dir Unity/Calf`
   overwrite the committed deliverable, and `build/logs/` is the record of the last full build (a manual validator run
   after the build once left `validate.log` at 172 PASS while `build_all.log` said 175). Give re-exports and validator
   runs a scratch `--out-dir` / `--json` / `--render-dir`. If you did overwrite them, re-run the full build before
@@ -92,6 +99,35 @@ Check tools:
   the GLB, which is reduced to 2048 on purpose). Before committing, check that
   `python3 -c "from PIL import Image; print(Image.open('Unity/Calf/Textures/T_Calf_BaseColor.png').size)"` prints `(4096, 4096)`.
 - Do not modify the reference media or `cow.glb`.
+
+### Adult cow (`ASSET=cow`)
+`bash tools/build_all.sh --asset cow` (about 7 min; logs in `build/cow/logs/`, run output `build/cow/logs/build_all_run.out`)
+runs the same steps with `ASSET=cow` on `build/cow/` and writes `Unity/Cow/`. What differs (all switched by
+`tools/asset_profile.py`):
+- **Stage A** keeps the horns (base loops capped, rigid on `Head`, `orig_part` 5). **Stage B** uses `P_COW` (adult
+  proportions: no torso compression, head/muzzle change, flank tuck or forehead tuft; a deeper barrel, finer legs than the
+  low-poly source, dewlap, leaf ears, tail switch), shortens the horns (x0.82) and adds a modelled udder with four teats
+  (closed islands, `orig_part` 6, rigid on the rear trunk bones). LOD0/1/2 58,080 / 14,520 / 3,376 tris.
+- **Textures:** `_cow_layout()` in `calf_textures.py` (Simmental coat; tune `thr`, `back`, `rump`, `flank` there), dark
+  slate hooves, grey-pink muzzle, horns cream with dark tips, pink udder; files `T_Cow_*`. No fur textures (no shell fur).
+- **Authoring scale:** stages A-D, every clip family and every QA run at the calf's authoring height (withers ~1.0 m), so
+  the tuned distances keep their meaning. The cow's trunk is longer: fore fetlocks 9 cm further forward, hind 11 cm
+  further back. Clip code that places hooves at absolute positions shifts them by that (`lying.adapt_to_rig`).
+- **Gaits:** `anim_gait.py` stretches every cycle x sqrt(1.42) = 1.19 (Walk 29 f, Trot 19, Gallop 17, Walk_Slow 43).
+  Cow overrides in the families: `idle_graze.COW_GRAZE_NECK`, `actions` `DEAD` / `D_HIT` / `DL_HIT` (the head lands on
+  its horn), `lying.adapt_to_rig`. The QA gate allows Idle 4 mm of IK gap on the cow (source over-reach, 3.84 mm).
+- **Stage E** (`tools/scale_asset.py`): uniform scale x1.42 of rig, meshes and every location key (checked on every frame:
+  max 0.014 mm float round-off) and renames `CalfRig`/`Calf_LOD*`/`M_Calf_*` to `CowRig`/`Cow_LOD*`/`M_Cow_*`. The export
+  and validator read `build/cow/stage_e.blend`.
+- **Unity:** `Unity/Cow/Editor/CowSetup.cs` = `CalfSetup.cs` with the cow's names and speeds (0.535 / 1.087 / 2.803 /
+  5.137 m/s), no fur. Keep the two in sync when one changes.
+- **Fast QA on the cow:** prefix the family commands with `ASSET=cow` and pass `--in build/cow/stage_b.blend` (their
+  default input is the calf's stage B). Cow values (authoring scale; x1.42 on the final cow): Graze_Loop nose pad
+  2.37-5.30 cm; Death head -0.57 cm, trunk -3.34 cm at the f33 impact; Death_Lying head +0.42 cm; lying legs >= -0.7 cm;
+  the udder goes up to 14.2 cm below the ground while lying (hidden under the body); `JOINT limits: all OK`; Leap REACH
+  5.0 mm, Death_Lying REACH 6.6 mm (the calf's are <= 0).
+- **Gate for the cow:** as below, with `build/cow/logs/`; final-review build: see `docs/WORKLOG.md` (validator 266
+  checks: the calf's 267 minus the shell-fur texture check).
 
 ## Verification gate
 A state is **verified-good** (and may become a checkpoint) when:
@@ -131,7 +167,8 @@ build: read the other lines against this table.
 - **Units and axes:** meters, Z up, and the calf **faces -Y** (Unity +Z after FBX export). Ground at z=0. Withers ≈1.0 m.
 - **Timing:** 30 fps. Actions use integer frames, with `use_frame_range` set and `use_cyclic` set for loops.
 - **Objects:** `CalfRig` (armature), with children `Calf_LOD0` (~47k tris), `Calf_LOD1` (~12k), `Calf_LOD2` (~2.7k). All LODs share one UV layout (`UVMap`), and every vertex has at most 4 bone influences (stage B), so Blender previews deform exactly as Unity.
-- **Material slots:** `[0] M_Calf_Body`, `[1] M_Calf_Eye` (the exporter moves the body slot last for the fur). The face attribute `orig_part` holds 0 coat, 1 old light patches, 2 hooves, 3 nose pad, 4 eyeball.
+- **Material slots:** `[0] M_Calf_Body`, `[1] M_Calf_Eye` (the exporter moves the body slot last for the fur). The face attribute `orig_part` holds 0 coat, 1 old light patches, 2 hooves, 3 nose pad, 4 eyeball (cow only: 5 horn, 6 udder and teats).
+- **Names across animals:** both animals keep the calf's Blender names (`CalfRig`, `Calf_LOD*`, `M_Calf_*`) through stages A-D; only the cow's stage E renames them to `Cow*`.
 - **Bones** (46 in stage B/C/D: the 43 source bones + `Jaw`, `Ear.L/R`; `.L` is +X):
   - Main chain: `Root` (ground, at the origin; the root-motion node), `Body` (the body root: its head is near the ground
     at z 0.205 m, and anim_lib pitches/rolls the body about a virtual COG at (0, -0.05, 0.68)), then the spine `Back`,
@@ -212,7 +249,7 @@ python3 tools/validate_export.py --fbx <scratch>/Calf/Calf.fbx --glb <scratch>/C
 - Keep the tools deterministic and parameterised (`--in`/`--out`), because each stage is re-run when an earlier stage changes.
 - After each milestone, update the "Current status" and "Open issues" tables in `docs/WORKLOG.md`, append a log entry
   (what changed, why, verification numbers, next steps) and commit.
-- Development branch: `claude/peaceful-lamport-fk2lw7`.
+- Development branch: `claude/zealous-cray-le9agd` (the calf's history came from `claude/peaceful-lamport-fk2lw7`, merged in PR #1).
 - **Safe checkpoints (user rule):** whenever the repo reaches a verified-good state (see "Verification gate"), make a
   commit whose message starts with `CHECKPOINT NN: <short name>` and **push it**. Add a row to the "Checkpoints" table in
   `docs/WORKLOG.md`. (This environment's git proxy only allows pushing the working branch, so pushed tags are rejected

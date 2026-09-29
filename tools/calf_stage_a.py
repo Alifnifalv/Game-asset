@@ -1,13 +1,19 @@
 """Stage A: import cow.glb, strip Sketchfab hierarchy, remove horns/udder/stray mesh,
 join all skinned parts into one mesh, weld material seams, recover quads, clean bone names.
-Output: build/stage_a.blend
+The adult cow profile (ASSET=cow, tools/asset_profile.py) keeps the horns: their open bases are capped, they are
+weighted rigidly to Head and tagged orig_part 5.
+Output: <profile build dir>/stage_a.blend (build/ for the calf, build/cow/ for the cow)
 """
 import bpy, bmesh, re, sys, os
 from mathutils import Vector
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import asset_profile as AP
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "cow.glb")
-OUT = os.path.join(ROOT, "build", "stage_a.blend")
+OUT = os.path.join(AP.BUILD, "stage_a.blend")
+os.makedirs(AP.BUILD, exist_ok=True)
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=SRC)
@@ -27,8 +33,9 @@ def mat_of(o):
     return o.material_slots[0].material.name if o.material_slots and o.material_slots[0].material else ""
 
 # --- delete horns, stylised eye decals ---------------------------------------
+DROP = ("Eye_Black", "Eye_White") if AP.IS_COW else ("Horns", "Eye_Black", "Eye_White")
 for o in list(meshes):
-    if mat_of(o) in ("Horns", "Eye_Black", "Eye_White"):
+    if mat_of(o) in DROP:
         meshes.remove(o)
         bpy.data.objects.remove(o, do_unlink=True)
 
@@ -48,6 +55,22 @@ for o in meshes:
     if m == "Hooves":      # dewclaws are floating 6-vert islands; keep (they read as dewclaws) 
         pass
 
+if AP.IS_COW:
+    # horns: cap the open base loop of each horn island (it would read as an eye socket in stage B) and weight the
+    # horn rigidly to the head (the source mixes ~45 % Neck3 in, which bends the horn when the neck moves)
+    ho = next(o for o in meshes if mat_of(o) == "Horns")
+    bm = bmesh.new(); bm.from_mesh(ho.data)
+    res = bmesh.ops.holes_fill(bm, edges=[e for e in bm.edges if e.is_boundary], sides=0)
+    bmesh.ops.poke(bm, faces=res["faces"])
+    bm.to_mesh(ho.data); bm.free()
+    head_g = next(g for g in ho.vertex_groups if g.name.startswith("Head"))
+    allv = list(range(len(ho.data.vertices)))
+    for g in list(ho.vertex_groups):
+        if g != head_g:
+            g.remove(allv)
+    head_g.add(allv, 1.0, "REPLACE")
+    print("horns kept: capped %d base loops, weighted to %s" % (len(res["faces"]), head_g.name))
+
 # --- join into one mesh --------------------------------------------------------
 bpy.ops.object.select_all(action="DESELECT")
 for o in meshes:
@@ -64,6 +87,12 @@ names = [s.material.name for s in body.material_slots]
 attr = me.attributes.new("orig_part", "INT", "FACE")
 for p in me.polygons:
     attr.data[p.index].value = p.material_index
+if "Horns" in names:        # cow profile: the horn gets its own part id (4 is the stage-B eyeball)
+    hi = names.index("Horns")
+    for p in me.polygons:
+        if p.material_index == hi:
+            attr.data[p.index].value = AP.PART_HORN
+    assert hi == len(names) - 1, names      # parts 0-3 keep their shared meaning
 print("parts:", list(enumerate(names)))
 
 # --- weld seams + tris->quads ------------------------------------------------

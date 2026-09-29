@@ -96,8 +96,11 @@ T0 = time.time()
 IMG_EXT = {".png", ".tga", ".jpg", ".jpeg", ".exr", ".tif", ".tiff", ".psd"}
 LOD_RE = re.compile(r"_LOD(\d+)$")
 # texture sets written by tools/calf_textures.py
-BODY_TEX = {"base": "T_Calf_BaseColor", "normal": "T_Calf_Normal", "rough": "T_Calf_Roughness", "ao": "T_Calf_AO"}
-EYE_TEX = {"base": "T_CalfEye_BaseColor", "normal": "T_CalfEye_Normal"}
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import asset_profile as AP          # ASSET=cow: T_Cow_* textures, Cow.fbx / CowRig defaults (stage E renamed the rig)
+_T, _TE = AP.TEX, AP.TEX_EYE
+BODY_TEX = {"base": _T + "_BaseColor", "normal": _T + "_Normal", "rough": _T + "_Roughness", "ao": _T + "_AO"}
+EYE_TEX = {"base": _TE + "_BaseColor", "normal": _TE + "_Normal"}
 
 
 def log(*a):
@@ -428,7 +431,7 @@ def copy_textures(tex_dir, out_tex):
     if not tex_dir or not os.path.isdir(tex_dir):
         return {}
     # authoring intermediates that no Unity material uses (16-bit fur height used only for the normal bake)
-    skip = {"T_Calf_Height"}
+    skip = {AP.TEX + "_Height"}
     files = sorted(f for f in os.listdir(tex_dir)
                    if os.path.splitext(f)[1].lower() in IMG_EXT and os.path.splitext(f)[0] not in skip)
     if not files:
@@ -786,8 +789,8 @@ def main(argv):
     ap.add_argument("--in", dest="inp", required=True, help="source .blend (never modified)")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--tex-dir", default=None, help="textures to copy into <out>/Textures (optional)")
-    ap.add_argument("--name", default="Calf", help="base name of the exported files")
-    ap.add_argument("--armature", default="CalfRig")
+    ap.add_argument("--name", default=AP.NAME, help="base name of the exported files (Calf; Cow with ASSET=cow)")
+    ap.add_argument("--armature", default=AP.NAME + "Rig")
     ap.add_argument("--actions", default="", help="comma list; default = every action compatible with the rig")
     ap.add_argument("--keep-helpers", action="store_true", help="keep the unweighted PoleTarget* helper bones")
     ap.add_argument("--helper-pattern", default=r"^PoleTarget")

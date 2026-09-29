@@ -21,6 +21,19 @@ pending, see "Checkpoints"). Every open item is in "Open issues" below (IDs `OI-
 | One-command build | Done: `bash tools/build_all.sh` (422 s: textures 276 s, validator 89 s). The animations step fails on a QA-gate violation; `--skip-textures` re-links the old materials and refuses if the stage-B UVs changed; each run keeps a timestamped copy of the validator log. Read the "Do not" list in CLAUDE.md first (OI-29, OI-33). | `tools/build_all.sh`, `tools/relink_materials.py` |
 | Final multi-lens review | **Done**: 5 lenses (likeness, animation, export rig, unity code, docs), each "ship with fixes"; 58 findings fixed or deferred; integrated, retuned for the smaller head and rebuilt (log entry of the same name below). What stays open is OI-35..OI-43. | "Log" below |
 
+**Adult cow (second asset, 2026-09-29):** `bash tools/build_all.sh --asset cow` builds an adult Simmental cow into
+`Unity/Cow` from the same source, tools and clip code (see CLAUDE.md "Adult cow"). Build of 2026-09-29 (565 s): QA gate
+pass (25 clips), validator **266 PASS / 0 FAIL / 0 WARN**. The calf build is unchanged by it (rebuilt the same day:
+see the log entry "adult cow").
+
+| Area (cow) | State | Where |
+|---|---|---|
+| Geometry | Done. Adult proportions of the source (no calf reshape), deeper barrel, dewlap, horns kept (x0.82, rigid on Head), modelled udder + 4 teats (rigid on the rear trunk). LOD0/1/2 58,080 / 14,520 / 3,376 tris. Final size 2.57 m long, 1.44 m high, 0.79 m wide. | `calf_stage_a.py`, `calf_stage_b.py` (`P_COW`, `add_udder`) |
+| Textures | Done at 4096: Simmental coat (`_cow_layout`), cream horns with dark tips, pink udder, dark slate hooves, grey-pink muzzle. No fur textures. | `calf_textures.py` |
+| Animation set | Done: the calf's 25 clips on the cow rig at authoring scale; adult gait timing (x1.19); cow fits in graze (neck), lying (hind feet for the longer trunk), Death / Death_Lying (head on its horn). | `anim_gait.py`, `clips/*.py` |
+| Scale + names | Done: stage E, x1.42 (exact to 0.014 mm), `Cow*` names. | `scale_asset.py` |
+| Unity | `CowSetup.cs` (calf script with cow names/speeds, no fur) and README written; not compiled or run (OI-01). | `Unity/Cow/` |
+
 ## Open issues
 One list for the whole project. The dated log entries and `Unity/Calf/README.md` "Known issues" point here; close items here.
 Severity: major = visible in normal gameplay or blocks a use case; minor = close-up or polish; note = accepted.
@@ -70,6 +83,11 @@ Severity: major = visible in normal gameplay or blocks a use case; minor = close
 | OI-41 | Mesh | Review L12: the top line and underline (rump, tail head, girth) differ from GiM. The fix moves rest bones (hips, tail chain) and needs every gait and family QA re-run. | minor | final review L12 | deferred |
 | OI-42 | Tools | Review L14: `silhouette_compare.py` still scales by bounding-box height. The reviewer's withers-normalised version (GrabCut mask, Walk f10, IoU and pattern agreement) was not ported; its scripts lived in the session scratchpad. | minor | final review L14 | deferred |
 | OI-43 | Unity | Review U6b: stale one-shot triggers are not reset automatically (that needs a runtime `StateMachineBehaviour` file). The README documents the `IsTag("Ready")` / `ResetTrigger` pattern. | minor | final review U6b | deferred |
+| OI-45 | Cow | The key-pose clips (idle, graze, lie down / get up, death, leap, turns, call, head shake) run at the calf's tempo; only the gaits are adult-paced (x1.19). A time stretch would need every family's frame-indexed keys and QA re-timed. | minor | adult cow | open |
+| OI-46 | Cow | While lying the udder goes up to 14.2 cm (authoring; 20 cm final) below the ground: hidden under the body on flat ground, visible on slopes. There is no udder bone to push it aside. | minor | adult cow lying QA | open |
+| OI-47 | Cow | Idle IK gap 3.84 mm at authoring scale (5.5 mm final), right fore f46-55: the source clip over-reaches on its own proportions. The gate allows 4 mm for the cow's Idle. | note | adult cow QA gate | accepted |
+| OI-48 | Cow | Death: the trunk goes 3.34 cm (authoring; 4.7 cm final) below the ground on the f33 impact frame (calf 1.04 cm); Leap and Death_Lying clamp a planted foot target by 5.0 / 6.6 mm (authoring; the calf's never clamp). | minor | adult cow actions QA | open |
+| OI-49 | Cow | The coat is procedural (domain-warped noise patches with the GiM layout biases), not a patch-for-patch copy of the GiM cow; the horns are the source's, shortened. No shell fur or fur cards. | note | adult cow | accepted |
 | OI-44 | Git | This environment's git proxy refuses tag pushes (403), so checkpoints are commits whose message starts with `CHECKPOINT NN:`. | note | CLAUDE.md checkpoint rule | accepted |
 
 ## Checkpoints (safe, pushed)
@@ -79,6 +97,7 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 |---|---|---|
 | 01 | `cdcf752` (+ docs-only commits after it) | Full pipeline from cow.glb → `Unity/Calf`: calf mesh (3 LODs), 4K textures, 21 clips, FBX + GLB. Validator 175 PASS / 0 FAIL / 1 WARN as `build_all.sh` runs it (172 PASS without `--render-dir`; the WARN is the 4-influence skin, Gallop max 23.7 mm). Final multi-lens review in progress. |
 | 02 | `0dc4c35` (deliverable) + docs/tool fixes in the CHECKPOINT 02 commit | Final review integrated: 25 clips, validator 267 PASS / 0 FAIL / 0 WARN, QA gate pass |
+| 03 | the CHECKPOINT 03 commit | Adult cow added (`Unity/Cow`, `--asset cow`): 25 clips, validator 266 / 0 / 0, QA gate pass; calf rebuilt unchanged (267 / 0 / 0) |
 
 ## Log
 
@@ -591,3 +610,41 @@ the rest to the orchestrator. The reviewers' harnesses and renders were in the s
 load), OI-38, OI-39 and OI-41..43 (deferred review items), OI-40 (Death_Lying hoof slide), and the older open rows
 (OI-01, the Unity import, first).
 **Next:** commit as CHECKPOINT 02, then one Unity import pass on a machine with Unity (OI-01).
+
+### 2026-09-29: adult cow (`--asset cow`, checkpoint 03)
+**What.** The user asked for "cow like cub": the adult cow next to the calf, built by the same pipeline. Look target:
+the GiM adult female in `videoplayback.mp4` (Simmental; index and colours in `docs/REFERENCES.md`).
+- `tools/asset_profile.py`: `ASSET=calf|cow` selects the build dir (`build/`, `build/cow/`), output (`Unity/Calf`,
+  `Unity/Cow`), texture prefix and final scale. Without `ASSET` every tool behaves as before.
+- Stage A keeps the horns (base loops capped, rigid on Head, `orig_part` 5). Stage B `P_COW`: no calf reshape; flank
+  -0.12 (deeper barrel), legs 0.84-0.97 of the low-poly source, dewlap 1.16, ears 1.15, tail switch 1.7, horns x0.82,
+  and `add_udder()`: an ellipsoid udder with a median groove plus four teats (closed islands, `orig_part` 6, weights
+  copied from the nearest belly vertex restricted to the trunk bones).
+- `calf_textures.py` `_cow_layout()`: tan base; white head (tan ears and poll), throat / brisket / belly (height rising
+  to the udder), legs below mid-forearm / stifle, tail below its root; irregular white patches from domain-warped fBm
+  with a lower threshold over the back behind the withers and on the flank, higher on the neck and shoulder, speckles
+  along patch borders. Horns (base -> tip gradient, rings), udder (skin, veins, pink teats), dark slate hooves.
+- Animation at the calf's authoring height (withers ~1.0 m), then stage E (`scale_asset.py`) x1.42 and `Cow*` names:
+  a uniform scale is exact for a skinned animated rig (checked every frame: 0.014 mm float round-off). Gaits x1.19 cycle
+  time (dynamic similarity): 0.535 / 1.087 / 2.803 / 5.137 m/s final. Cow fits: graze neck 23.3/26.3/23.3 deg (nose pad
+  2.37-5.30 cm authoring), lying hoof positions shifted by the rig's own fetlocks (`lying.adapt_to_rig`: fore -9.1 cm,
+  hind +11.0 cm; lying legs went from -11.0 to -0.7 cm), dead head on its horn (`DEAD`, `D_HIT`, `DL_HIT`: Death head
+  -9.61 -> -0.57 cm, Death_Lying -8.47 -> +0.42 cm). QA gate: the cow's Idle may have 4 mm of IK gap (3.84 mm).
+- Exporter / validator: texture names and defaults from the profile; the body-material check accepts `M_Cow_Body`; the
+  size plausibility window scales with the profile. `build_all.sh --asset cow` adds the scale step and skips the fur
+  textures. Unity: `Unity/Cow/Editor/CowSetup.cs` (namespace `CowAsset.EditorTools`, menu Tools > Cow), README.
+
+**Verification.** `bash tools/build_all.sh --asset cow` (565 s, `build/cow/logs/build_all_run.out`): every step ok,
+`QA GATE: pass (25 clips)`, validator 266 PASS / 0 FAIL / 0 WARN (FBX skin 0.018 mm, GLB 0.069 mm, Khronos 0 errors),
+`T_Cow_BaseColor` 4096. Family QA on the cow's stage B: all BOUNDARY / SEAM / RESIDUAL 0.0000 (Leap end 0.0006 mm
+root-relative); lying `JOINT limits: all OK` (GetUp LF fetlock -60.6 deg); TURN f56 0.0005 mm; the new cow values are in
+CLAUDE.md "Adult cow". Calf: `bash tools/build_all.sh` rebuilt after the change (`build/logs/build_all_run3.out`, 419 s):
+`QA GATE: pass (25 clips)`, validator 267 PASS / 0 FAIL / 0 WARN, as checkpoint 02. Its textures equal the committed ones
+except one texel of BaseColor and one of Normal (1/255: bake noise); the FBX / manifest differ only in export
+timestamps. The committed `Unity/Calf` (checkpoint 02) was therefore kept as is.
+Renders (walk, death filmstrips; export contact sheets) checked by eye against the GiM stills (28 s, 11.5 s).
+
+**Open.** OI-45..OI-49 (tempo of the key-pose clips, udder in the ground while lying, Idle source over-reach, Death
+impact frame and two reach clamps, procedural coat). OI-01 covers `CowSetup.cs` too (not compiled here: no C# compiler
+in this session).
+

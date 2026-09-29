@@ -46,6 +46,8 @@ from mathutils import Matrix, Vector, Euler, Quaternion
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+import asset_profile as AP
 T0 = time.time()
 RESULTS = []
 KEY_BONES = ["Head", "FF.L", "FF.R", "FFB.L", "FFB.R", "Tail7"]
@@ -709,6 +711,11 @@ def lod_objects():
     return sorted(lods, key=lambda o: int(LOD_RE.search(o.name).group(1)))
 
 
+def _is_body(mat_name):
+    """the body material: M_Calf_Body (calf) or M_Cow_Body (adult cow, renamed by tools/scale_asset.py)"""
+    return re.fullmatch(r"M_[A-Za-z]+_Body", mat_name or "") is not None
+
+
 def bbox(pts):
     return pts.min(0), pts.max(0)
 
@@ -717,7 +724,7 @@ def bbox(pts):
 def load_source(a, manifest):
     bpy.ops.wm.open_mainfile(filepath=a.src)
     sc = bpy.context.scene
-    arm = bpy.data.objects.get("CalfRig") or find_armature()
+    arm = bpy.data.objects.get("CalfRig") or bpy.data.objects.get("CowRig") or find_armature()
     lods = [o for o in lod_objects() if any(m.type == "ARMATURE" and m.object == arm for m in o.modifiers) or o.parent == arm]
     S = {"fps": sc.render.fps / sc.render.fps_base, "arm": arm.name}
     S["bones_all"] = [b.name for b in arm.data.bones]
@@ -742,7 +749,7 @@ def load_source(a, manifest):
     for name, info in S["lods"].items():   # exporter moves M_Calf_Body to the last slot (CalfFur shells)
         exp = manifest["lods"].get(name, {}).get("materials") if manifest is not None and "lods" in manifest else None
         if exp is None:
-            exp = [m for m in info["mats"] if m != "M_Calf_Body"] + [m for m in info["mats"] if m == "M_Calf_Body"]
+            exp = [m for m in info["mats"] if not _is_body(m)] + [m for m in info["mats"] if _is_body(m)]
         info["export_mats"] = exp
     acts = armature_actions(arm)
     if manifest is not None:
@@ -1369,7 +1376,9 @@ def check_fbx_import(a, S, expect_tex):
         mn, mx = bbox(co)
         smn, smx = bbox(S["rest_coords"])
         dim, sdim = mx - mn, smx - smn
-        ok = np.abs(mn - smn).max() < 0.002 and np.abs(mx - smx).max() < 0.002 and 0.8 < dim[2] < 1.4 and 1.4 < dim[1] < 2.0
+        k = AP.FINAL_SCALE      # plausible size window: calf 0.8-1.4 m high, 1.4-2.0 m long; the adult cow x1.42
+        ok = np.abs(mn - smn).max() < 0.002 and np.abs(mx - smx).max() < 0.002 and 0.8 * k < dim[2] < 1.4 * k \
+            and 1.4 * k < dim[1] < 2.0 * k
         check(sec, "rest dimensions", ok, "L(y) %.3f m, H(z) %.3f m, W(x) %.3f m (source %.3f / %.3f / %.3f), ground z=%.4f" %
               (dim[1], dim[2], dim[0], sdim[1], sdim[2], sdim[0], mn[2]))
         if co.shape == S["rest_coords"].shape:
