@@ -19,6 +19,8 @@ pending, see "Checkpoints"). Every open item is in "Open issues" below (IDs `OI-
 | Unity setup script, Animator, shell fur | Fixed after the review (U1-U10) and integrated: Death_Lying, time-scaled Trot/Gallop children (3.2-3.6 m/s crossfade), 0.35 s Lying_Idle → GetUp, 0.25 s Death blend. The current `CalfSetup.cs` compiles with Roslyn (C# 9) against Unity stubs; the review version also ran against fakes (90 + 12 checks); the shader compiles with DXC (1032 variants). Not run in Unity (OI-01). | `Unity/Calf/Editor/CalfSetup.cs`, `Unity/Calf/Fur/` |
 | Unity verification | **Not done.** Needs a machine with Unity (OI-01). | `Unity/Calf/README.md` "Not verified" |
 | One-command build | Done: `bash tools/build_all.sh` (422 s: textures 276 s, validator 89 s). The animations step fails on a QA-gate violation; `--skip-textures` re-links the old materials and refuses if the stage-B UVs changed; each run keeps a timestamped copy of the validator log. Read the "Do not" list in CLAUDE.md first (OI-29, OI-33). | `tools/build_all.sh`, `tools/relink_materials.py` |
+| Rottweiler (male) (`--asset dog`) | **Done (likeness round 1, checkpoint 05)**: own pipeline `tools/dog/` (SDF anatomy mesh, 43-bone rig, 4K black-and-tan textures, 25 clips with a QA gate), shared exporter/validator, `Unity/Rottweiler` with `RottweilerSetup.cs`; one likeness round against the GiM images (head, ears, body, coat, poses). Open: OI-50..OI-54. | `tools/dog/`, log entry "Rottweiler (male)" |
+| Raven (`--asset raven`) | **Done (first version, checkpoint 06)**: own pipeline `tools/raven/` (SDF body + lofted bill + modelled feather strips on per-feather bones, 122-bone rig with the wing fold, 4K body and feather-atlas textures, 24 ground and flight clips with a QA gate), shared exporter/validator, `Unity/Raven` with `RavenSetup.cs`. Open: OI-56..OI-62. | `tools/raven/`, `docs/raven_reference.md`, log entry "Raven" |
 | Final multi-lens review | **Done**: 5 lenses (likeness, animation, export rig, unity code, docs), each "ship with fixes"; 58 findings fixed or deferred; integrated, retuned for the smaller head and rebuilt (log entry of the same name below). What stays open is OI-35..OI-43. | "Log" below |
 
 **Adult cow (second asset, 2026-09-29):** `bash tools/build_all.sh --asset cow` builds an adult Simmental cow into
@@ -88,6 +90,19 @@ Severity: major = visible in normal gameplay or blocks a use case; minor = close
 | OI-47 | Cow | Idle IK gap 3.84 mm at authoring scale (5.5 mm final), right fore f46-55: the source clip over-reaches on its own proportions. The gate allows 4 mm for the cow's Idle. | note | adult cow QA gate | accepted |
 | OI-48 | Cow | Death: the trunk goes 3.34 cm (authoring; 4.7 cm final) below the ground on the f33 impact frame (calf 1.04 cm); Leap and Death_Lying clamp a planted foot target by 5.0 / 6.6 mm (authoring; the calf's never clamp). | minor | adult cow actions QA | open |
 | OI-49 | Cow | The coat is procedural (domain-warped noise patches with the GiM layout biases), not a patch-for-patch copy of the GiM cow; the horns are the source's, shortened. No shell fur or fur cards. | note | adult cow | accepted |
+| OI-50 | Dog | The Rottweiler mesh is procedural (SDF anatomy, marching cubes, decimation): proportions and markings follow the breed and the GiM stills, but there is no sculpted detail (forehead wrinkles, skin folds at the neck, muscle definition) and there are no fur cards. Likeness round 1 (checkpoint 05) gave folded ears that stand off the head, a rounder muzzle with flews, thicker legs, cat feet with short hooked claws and a new coat; the remaining gaps (a short muzzle, thin neck, tan socks on the legs, tan lower jaw and throat stripe, matte coat) are listed in `scratchpad` plan_round2 (not applied: the user asked for one round). | minor | Rottweiler | open |
+| OI-51 | Dog | Gallop: the hind push-off is out of reach, so `reach_pass` lowers the body up to 67 mm around it (body drop in the QA line); Trot 15 mm, Walk 1.3 mm. The gallop's body wave needs a redesign (as the calf's OI-36/37). | minor | Rottweiler QA | open |
+| OI-52 | Dog | Clip set: no turns in place, no rear-up / beg, no scratch, shake or drink (the GiM preview shows rear-up, scratch while sitting and a sniff-walk); `Death` has no root motion and falls over 28 frames (GiM faster); `Death` from a sit or lie blends from the standing start pose. | minor | Rottweiler vs GiM preview | open |
+| OI-53 | Dog | No eyelids (no blink) and no lip-lift shapes: `Growl`/`Attack` snarl with the `Nose` bone and the jaw only. | minor | Rottweiler | open |
+| OI-54 | Dog | `RottweilerSetup.cs` was generated from `CalfSetup.cs` and not compiled here (no .NET in the container; the calf's Unity stubs were not kept). Unity import unverified (OI-01). | major | Rottweiler | open |
+| OI-55 | Calf | Found while re-checking the shared validator for the Rottweiler: the committed `Unity/Calf` (checkpoint 02, exported 2026-09-28 18:25) does not match the calf rebuild left in `build/stage_d.blend` by the cow session (07:31, `build/logs/build_all_run3.out`: 267/0/0 against its own, uncommitted export): LOD0 rest vertices differ by up to 38.5 mm (near the left ear), so validating the committed FBX against that build gives 260 PASS / 6 FAIL (tangent basis x3, skin x2, rest vertices). The HEAD validator gives the same failures, so it is not a tool change. Cause unknown (a stage-B change after checkpoint 02, or non-determinism). | major | Rottweiler session | open: rebuild the calf, diff it against checkpoint 02, commit whichever is right |
+| OI-56 | Raven | Folded wing close up: the covert rows at the carpal / shoulder still read as layered rigid plates in 3/4 front views and when the body pitches (Eat bow); the folded arm skin sits 1.3-1.9 cm outside the remex plane. Needs a fold corrective for the arm / propatagium skin or a sculpted carpal mass. Reads as a shoulder bump at game distance. | minor | Raven review | open |
+| OI-57 | Raven | `RavenSetup.cs` compiled only against local Unity API stubs (dotnet 8); the Animator (Walk / Hop exit times, Fly / Glide switching, speedParameter) and the Cutout feather material are unverified in Unity (OI-01). | major | Raven | open |
+| OI-58 | Raven | Death_L/R: the Shin twist is 24.6 deg/f against the raven's 25 deg/f leg limit (no margin); Death has no root motion; the eyelids (`Lid.X`) are placeholders (no blink, the dead eye stays open). | minor | Raven QA | open |
+| OI-59 | Raven | Flight: Fly f8 and TakeOff f30 show gaps between the swept-back wing's trailing edge and the fanned tail (not holes in a surface); C.track ease-to-zero stalls in Hop / Land / Attack; TakeOff unfolds the wing quickly at f3-6. | minor | Raven review | open |
+| OI-60 | Raven | Clip set vs GiM: no Walk_Start / Walk_Stop, no additive looks / fingers, no Sitting_Nest / Stand_Twig perch clips, no preen / shake; Walk starts in its own double support (not on `stand()`). | minor | Raven vs GiM list | open |
+| OI-61 | Raven | Stage A's LOD2 triangle count varies by a few hundred between runs (the body decimation retries upward on UV folds), so LOD2 is not bit-reproducible; `--relink-only` is guarded by the LOD0 UV hash. | minor | Raven | open |
+| OI-62 | Raven | Likeness details left for a later round: eye opening / lid gap, bill hook sliver and tomium line, nasal-bristle and hackle density, brow, breast texture, tarsus scutes, undertail coverts; the plumage reads a little grey under bright overcast light. | minor | Raven review | open |
 | OI-44 | Git | This environment's git proxy refuses tag pushes (403), so checkpoints are commits whose message starts with `CHECKPOINT NN:`. | note | CLAUDE.md checkpoint rule | accepted |
 
 ## Checkpoints (safe, pushed)
@@ -98,6 +113,9 @@ Marked by commits whose message starts with `CHECKPOINT NN:` (`git log --oneline
 | 01 | `cdcf752` (+ docs-only commits after it) | Full pipeline from cow.glb → `Unity/Calf`: calf mesh (3 LODs), 4K textures, 21 clips, FBX + GLB. Validator 175 PASS / 0 FAIL / 1 WARN as `build_all.sh` runs it (172 PASS without `--render-dir`; the WARN is the 4-influence skin, Gallop max 23.7 mm). Final multi-lens review in progress. |
 | 02 | `0dc4c35` (deliverable) + docs/tool fixes in the CHECKPOINT 02 commit | Final review integrated: 25 clips, validator 267 PASS / 0 FAIL / 0 WARN, QA gate pass |
 | 03 | the CHECKPOINT 03 commit | Adult cow added (`Unity/Cow`, `--asset cow`): 25 clips, validator 266 / 0 / 0, QA gate pass; calf rebuilt unchanged (267 / 0 / 0) |
+| 04 | the CHECKPOINT 04 commit | Rottweiler (male) added (`Unity/Rottweiler`, `--asset dog`, own pipeline `tools/dog/`): 3 LODs, 4K textures, 25 clips; dog QA gate pass, validator 264 PASS / 0 FAIL / 0 WARN; calf and cow deliverables untouched |
+| 05 | the CHECKPOINT 05 commit | Rottweiler likeness round 1 (head design frame, ears, muzzle, legs, paws, coat palette and markings, pose retunes): dog QA gate pass, validator 264 PASS / 0 FAIL / 0 WARN, LODs 46,848 / 10,992 / 3,106 |
+| 06 | the CHECKPOINT 06 commit | Raven added (`Unity/Raven`, `--asset raven`, own pipeline `tools/raven/`): 3 LODs with modelled feathers, 4K body + feather textures, 122-bone rig, 24 clips; raven QA gate pass, validator 268 PASS / 0 FAIL / 0 WARN; the dog and cow deliverables re-validate unchanged with the shared-tool changes |
 
 ## Log
 
@@ -647,4 +665,135 @@ Renders (walk, death filmstrips; export contact sheets) checked by eye against t
 **Open.** OI-45..OI-49 (tempo of the key-pose clips, udder in the ground while lying, Idle source over-reach, Death
 impact frame and two reach clamps, procedural coat). OI-01 covers `CowSetup.cs` too (not compiled here: no C# compiler
 in this session).
+
+### 2026-09-29: Rottweiler (male) (`--asset dog`, checkpoint 04)
+**What.** The user asked for the male Rottweiler ("now Rottweiler (male)"), with the GiM *Animalia - Rottweiler* stills and
+preview in `Rottweiler (male)/` and a sample asset in `Rottweiler (male)/Dog/`. The sample (DogGlb.glb: 870 tris, box
+head, stick legs, a 38-bone Rigify metarig, 9 clips at 24 fps) is far below the target, and the calf pipeline is built on
+`cow.glb`'s hoofed rig, so the dog got its own stages in `tools/dog/` and shares only the exporter and the validator.
+- **Mesh** (`anatomy.py`, `sdf.py`, `dog_stage_a.py`): ~110 signed-distance primitives (round cones, ellipsoids, rounded
+  boxes, smooth unions) laid on a breed-standard skeleton (withers 0.66 m, trunk 0.74 m, chest depth 50 %, skull:muzzle
+  3:2), each tagged with its bone(s). A 2 mm grid (59 M voxels) -> marching cubes (1.1 M tris, one component) ->
+  pymeshlab quadric decimation to 37.8 k tris. The lip line is cut open onto an oral cavity; eye sockets with lid rims
+  are carved around eyeballs placed on the skin surface. Separate parts: draped ear flaps (explicit two-sided sheets
+  following the head surface 4-10 mm off it), UV-sphere eyeballs (own material), 18 claws incl. dewclaws, teeth, a
+  3-bone tongue. One xatlas atlas (body + parts); LOD1/LOD2 decimated with their UVs (texture-aware quadric collapse
+  through an OBJ: pymeshlab.Mesh cannot set wedge texture indices). Weights: soft-min of the primitive distances (sigma
+  1 cm), chains split along their bones, the lip line split hard between Head/Nose and Jaw, 4 smoothing passes, 4
+  influences. Face attribute `part` (coat, mouth/socket, claw, nose, eye, pad, tooth, tongue, ear).
+- **Rig** (`dog_stage_b.py`): 43 bones incl. Nose, Jaw, Tongue1-3, Ear1/2, Eye, Scapula, FrontFoot/Toe, HindFoot/Toe,
+  Tail1-6; rolls with local X ~ -X world; never connected (see below).
+- **Textures** (`dog_textures.py`): own numpy rasteriser of the atlas (tri index + barycentrics per texel, 9.5 M texels at
+  4K), the coat painted in 3D from landmarks (eye spots, cheeks, muzzle sides and chin with a black bridge, throat bib, two
+  chest triangles, fore legs to mid-forearm and higher inside, hind legs up the front of the hock and inside the thighs,
+  under the tail; black lips / lid rims / nose / claws, dark pads, pink-lavender tongue, gums), a fur-clump normal map
+  (noise stretched along the hair flow, differentiated along each texel's tangent frame), AO from the anatomy SDF at the
+  vertices, procedural dark-brown iris. 178 s at 4096.
+- **Animation** (`dog_anim.py` + `clips/`): pose model -> analytic leg IK -> FK keys (no constraints). Scapula swing
+  (gain 0.75, clamped +-35 deg) and glide (<= 4 cm: no collarbone); pastern/metatarsus a hinge in the leg plane; hind
+  metatarsus follows the leg's sweep (hock never past straight); leg planes continuous frame to frame; `reach_pass`
+  lowers the body where a paw cannot reach. Families: `locomotion` (Walk_Slow/Walk/Trot/Gallop, in place + `_RM`:
+  lateral walk, diagonal trot, rotary gallop, paw roll-off, carpus/hock folds), `idles` (Idle, Idle_Pant,
+  Idle_LookAround, Idle_Sniff, Bark, Growl, Eat), `sit_lie` (Sit_Start/Idle/End, Lie_Start, Lying_Idle, Lie_End),
+  `actions` (Jump with 1.6 m root motion and world-planted paws, Attack, PlayBow, Death onto the right side with the legs
+  carried by the body). `dog_animations.py` runs them with a QA gate (IK gap, planted slide, loop seams, backward bends,
+  carpus dorsiflexion, per-frame leg twist, LOD2 ground).
+- **Shared tools**: `asset_profile.py` `ASSET=dog` (`Rottweiler`, `build/dog`, `Unity/Rottweiler`); `build_all.sh --asset
+  dog`; `validate_export.py` takes the dog's key bones, limb regex, one-shot boundaries, tail tip and size window from the
+  profile and finds `RottweilerRig`; `render_clip.py --rig`. Unity: `Unity/Rottweiler/Editor/RottweilerSetup.cs`
+  (from `CalfSetup.cs`: the dog's clip table, speeds, Sit/Lie chains, Sniff/Eat/Growl/Pant bools, one-shots, Death).
+
+**Bugs found on the way.** The first export was 1.37 m off on every bone: the exporter's rig axis bake transforms edit
+bones one at a time, and connected bones (child head = parent tail) got the rotation twice; the dog's bones are now never
+connected (the calf's imported bones never were). Exporters also drop duplicate triangles (decimation fins, 4 per LOD):
+stage A removes them. The hind "fold" had the wrong sign (a hock flexes with the paw forward), the carpus check counted
+flexion as extension, and the Death legs flipped until the scapula swing was clamped, the paw angles moved to the body
+frame and the legs were carried by the rolling body.
+
+**Verification.** `bash tools/build_all.sh --asset dog` (about 6 min: stage A 85 s, textures 164 s, animations 6 s,
+export 23 s, validator 78 s; `build/dog/logs/build_all_run.out`): every step ok; stage B reports 0 degenerate tangents;
+`QA GATE: pass (25 clips)` (rest self-test 1.3e-6; IK gap <= 0.008 mm; planted slide 0.00 mm on the `_RM` gaits, the idles
+and the Jump stances; loop seams <= 0.001 mm; no backward bends; leg twist <= 11.4 deg/f (Death); body drop Walk 1.3 mm,
+Trot 15 mm, Gallop 67 mm (OI-51)); validator **264 PASS / 0 FAIL / 0 WARN**: 43 bones, every take matches the source on
+every frame (~0.005 mm), skin on all 1,347 frames FBX <= 0.006 mm (every LOD) and GLB 0.008 mm, root travel Jump 1.600 m
+and the `_RM` gaits 0.623 / 0.767 / 1.333 / 2.600 m per cycle along +Z, no Root height / pitch / roll, clip boundaries
+vs Idle f0 <= 0.4 deg (Jump 3.3 deg at the tail tip), rest 1.175 x 0.889 x 0.390 m, faces +Z, Khronos glTF-Validator
+0 errors / 0 warnings, render check (Attack f15) identical boxes. LODs 45,594 / 11,008 / 3,114 tris; FBX 13.9 MB, GLB
+11.2 MB; `T_Rottweiler_BaseColor` 4096. The shared-tool changes were re-checked on the committed deliverables: the calf
+and the cow were re-validated into scratch folders: the cow 266 / 0 / 0 as at checkpoint 03; the calf 260 / 6 against
+the calf build in `build/`, identical with the HEAD validator (OI-55, not caused by this change).
+Renders (clay and textured contact sheets, walk / gallop / lie filmstrips) checked by eye against the GiM stills and the
+preview video.
+
+**Open.** OI-50..OI-54 (procedural mesh detail, gallop body drop, missing clips vs GiM, no eyelids / lip shapes,
+`RottweilerSetup.cs` not compiled), OI-01 (Unity), and OI-55 (found on the way: the committed calf does not match the
+calf build in `build/`; the cow re-validates 266 / 0 / 0).
+
+### 2026-09-29: Rottweiler likeness round 1 (checkpoint 05)
+**Request.** "make it close to the imges dog" (the GiM *Animalia - Rottweiler* stills and preview video); later "just one
+round is enough".
+
+**What changed** (`tools/dog/`; planned by a six-lens critique with adversarial verifiers, implemented as four work
+packages, integrated with `preview.sh`):
+- New tools: `dog_compare.py` (14 reference | ours pairs from video frames and stills, fair lighting: Standard view
+  transform, soft sun) and `preview.sh` (A-D with 1K textures + comparisons into a scratch folder).
+- Head (`anatomy.py`): a head design frame (`H`, `H_inv`, `HEAD_POS` lower and set back, `HEAD_PITCH` 10, `HEAD_SCALE`
+  1.05; `J["neck2"]` moved), a curved lip line (`lip_z`, `LipCut`) with hanging flews, a front upper lip, lip corners, a
+  new jaw/chin, skull, brow and cheeks, a broad nose pad, a larger oblique eye with socket and lids, folded ears that stand
+  off the skull (winding and volume checked).
+- Body: thicker forearms and lower legs, elbow and brisket heights, cat feet (`TOES`, `PAW_SC`), short hooked claws,
+  thigh/gaskin/hock, belly, tail joints.
+- Coat (`dog_textures.py`): new palette (charcoal black with lighter hair tips, golden tan, rust rim), curved muzzle
+  markings, chest wedges, joint-relative leg masks, pale paws, pencil marks, macro fur normal, Specular IOR Level 0.5.
+- Animation: `Jaw` sign (+ = open), ear pitch mapped to a swing back and out; held poses carry the head-carriage
+  compensation (Neck1 -6, Neck2 -4); retuned sit, lie, sniff, growl, pant, bow and the walk tail.
+- Round 2 (critique done, implementation half way) was stopped at the user's request; its plan and partial diff stay in
+  the session scratchpad (`likeness/plan_round2.md`, `round2_partial.patch`), not in the repo.
+
+**Verification.** `bash tools/build_all.sh --asset dog > build/dog/logs/build_all_run.out` (about 6.5 min: stage A 80 s,
+textures 201 s, validator 78 s): every step ok, stage B 0 degenerate tangents, `QA GATE: pass (25 clips)` (IK gap <= 0.008
+mm, planted slide 0.00 mm, body drop Walk 0 / Trot 9.8 / Gallop 66.8 mm, leg twist max 10.9 deg/f (Death), Death LOD2 paws
+-1.77 cm), validator **264 PASS / 0 FAIL / 0 WARN**, `T_Rottweiler_BaseColor` 4096, LODs 46,848 / 10,992 / 3,106 tris.
+Before/after comparison sheets checked by eye against the references (head, ears, coat and poses clearly closer).
+
+**Open.** OI-50 (updated: remaining likeness gaps), OI-51..OI-54, OI-55. Next: the raven (`ravan/`).
+
+### 2026-09-29: Raven (checkpoint 06)
+**Request.** "now raven assts in ravan folder": the GiM *Animalia - Raven* references (6 stills, the preview video) and
+a sample `ravan/Raven.glb` (2.6k tris, 48-bone metarig, no weights or clips; not usable as a base).
+
+**How it was built.**
+- A reference study (4 analysts + adversarial checkers + synthesis) measured the stills and the video:
+  `docs/raven_reference.md` (joint tables for the standing and the spread-wing pose, feather tables and planform, Unity
+  PBR values, the GiM clip catalogue with frame timings, our clip list).
+- The foundation was written first: `raven_anatomy.py` (joints, bone table, SDF body), `feathers.py` / `plumage.py`
+  (closed feather strips, the feather atlas slots), stages A and B, `raven_anim.py` (Pose, the wing fold, leg IK), the
+  clip runner and QA gate. The fold was tuned against the GiM side still (`raven_views.py --cmp88`) and by numbers
+  (feather-into-body penetration, the top line vs the spec's back line); a mirrored in-plane axis, the covert pivots and
+  four sign errors (jaw, wing elevation, sweep, flight pitch) were found and fixed on the way.
+- Then five parallel packages (shape / likeness, textures, ground clips, flight clips, export + validator + Unity), an
+  integrator (full build), three adversarial reviewers (look, motion, pipeline) and one fix pass. Their main results:
+  a lofted bill with a working gape, a flatter forehead, a 63-strip hackle beard, a bristle tuft, trouser feathers, the
+  breast on the spec line; body and feather atlases painted in 3D (feather scallops by region, violet / blue-violet
+  gloss tints, scutes, bill ridges, the beaded eyelid ring; barbs, rachis, vane splits and a cutout edge in the feather
+  atlas); 24 clips with GiM timings; marginal coverts and covert pivot bones (rig 98 -> 122) so the flying wing has no
+  see-through holes and the folded coverts stay on the arm; a smooth TakeOff launch; separate Walk / Hop and Fly / Glide
+  Animator states; `LegPose.local` for the dead legs.
+- Shared tools: `build_all.sh --asset raven` (and `--build-dir` / `--out-dir` for scratch builds of the dog and the
+  raven); `export_unity.py` recognises a "feather" material (retargets its images; glTF alphaMode MASK); the validator's
+  raven block (key bones, leg twist 25 deg/f, wing-twist WARN 60 deg/f, per-clip boundary references, span window, Root
+  climb for TakeOff / Land, GLB memory WARN level 150 MB). The dog and cow deliverables were re-validated with the changed
+  validator (see Verification).
+
+**Verification.** `bash tools/build_all.sh --asset raven > build/raven/logs/build_all_run.out` (stage A 56 s, textures
+173 s, animations 8 s, export 46 s, validator 113 s): every step ok, stage B 0 degenerate tangents, `QA GATE: pass (24
+clips)` (rest self-test 9e-7, boundaries TakeOff end vs Fly 0.0006 mm, Land end vs stand 0.0009 mm), validator **268 PASS /
+0 FAIL / 0 WARN** (Khronos glTF-Validator 0 errors / 0 warnings), `T_Raven_BaseColor` 4096 (all body and feather maps
+4096, eye 1024), LODs 43,580 / 11,778 / 3,286 tris, rest size 0.57 x 0.39 m, span 1.07 m. Renders of the final build
+(textured Idle / Glide sheets, the 88c16e0c overlay, Fly / Walk / Eat / TakeOff / Land filmstrips) checked by eye against
+the references: the perched silhouette matches the GiM still; flight shows the slotted primaries, the tail fan and the
+wingbeat phases. Re-validation of the committed deliverables with the changed validator (scratch --json, no --render-dir): Rottweiler 260 PASS / 0 FAIL / 0 WARN, cow 262 / 0 / 0 (the 4 render checks omitted: 264 and 266 with them, as at checkpoints 05 and 03).
+
+**Open.** OI-56..OI-62 (fold close-up plates, RavenSetup.cs unverified in Unity, Death twist margin, flight gaps,
+missing clips vs GiM, LOD2 non-determinism, likeness details), OI-01 (Unity).
 

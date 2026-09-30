@@ -60,6 +60,37 @@ with darker tips; a large pink udder with four teats; dark slate hooves; grey-pi
 eyes. Sampled colours (lit, 9 x 9 px means): tan 188,132,105; horn 217,192,163; hoof 99,103,123; ear outside 114,71,60.
 Scale: withers about 1.4 m (the build uses 1.42 x the calf's authoring rig).
 
+## Rottweiler (male): `Rottweiler (male)/` (the `--asset dog` build)
+Stills (GiM *Animalia - Rottweiler*, 1920 x 1080 `.webp`): lying sphinx with a hind leg out (`a4763944`, `8c06f643`),
+leaping a wall (`53132155`), open-mouth approach (`91ababf0`), sitting with the tongue out (`843d64c3`), standing on a
+container (`59985a6f`). `videoplayback (4).mp4` (1920 x 1080, 30 fps, 64 s):
+
+| Time (s) | Content | Our clip |
+|---|---|---|
+| 0-5 | Title cards ("ROTTWEILER", "canis lupus familiaris", "animation preview") | - |
+| ~5.5-10 | Sniffing walk, nose low | `Walk_Slow` |
+| ~10.5-13 | Walk, trot | `Walk`, `Trot` |
+| ~14-18.5 | Gallop | `Gallop` |
+| ~19-20.5 | Leap | `Jump` |
+| ~21-24 | Standing, panting, tongue out | `Idle_Pant` |
+| ~24.5-27 | Sniffing the ground | `Idle_Sniff`, `Eat` |
+| ~28-33 | Standing idle, looking around (32-33 s: best side stills) | `Idle`, `Idle_LookAround` |
+| ~34-41 | Aggressive stance, stepping, barking | `Growl`, `Bark` |
+| ~42-44 | Sitting down | `Sit_Start` |
+| ~44-54 | Sitting: panting, looking around, scratching | `Sit_Idle` (no scratch: OI-52) |
+| ~55-58 | Standing up, barking | `Sit_End`, `Bark` |
+| ~58.7 | Play bow | `PlayBow` |
+| ~59.7 | Rearing up on the hind legs | - (OI-52) |
+| ~60.8 | Lying on its side (death) | `Death` |
+| 61.5- | Credits card | - |
+
+Look: male, stocky and muscular; broad skull with a pronounced stop, strong cheeks, deep broad muzzle, black lips; medium
+pendant triangular ears set high and wide; dark brown eyes; natural tail (hanging at rest, raised in motion). Black coat
+with a blue-grey sheen; mahogany tan: spot over each eye, cheeks, muzzle sides and chin, throat, two chest triangles,
+fore legs from the toes up the forearm, hind legs from the toes up the front of the hock and inside the thighs, under the
+tail. Pink-lavender tongue. The sample `Dog/` (DogGlb.glb 870 tris, Rigify metarig with 38 bones, clips Bark, Idle,
+Idle_Tail_Wag, Lay_Start/Loop, Run, Sit_Start/Loop, Walk at 24 fps) was used as a pose reference for sitting and lying.
+
 ## Close-up spec from the user (GiM close-ups, not on disk)
 Use this as a checklist when judging the head, coat and lying pose.
 - [ ] **Head coat:** orange-brown.

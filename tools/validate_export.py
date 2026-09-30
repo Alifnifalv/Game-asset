@@ -463,6 +463,47 @@ LIMB_RE = re.compile(r"(Leg|^FF)")      # leg chain + hoof bones: the tight twis
 STANDING_ENDS = {"TurnLeft90": "both", "TurnRight90": "both", "Leap": "both", "HeadShake": "both", "Call": "both",
                  "Idle_LookAround": "both", "Graze_Start": "start", "Graze_End": "end", "LieDown": "start",
                  "GetUp": "end", "Death": "start"}
+TAIL_TIP = "Tail7"
+SIZE_WINDOW = ((0.8, 1.4), (1.4, 2.0))      # plausible (height, length) at FINAL_SCALE 1
+if AP.IS_DOG:     # the Rottweiler rig (tools/dog/): paw bones, a 6-bone tail, its own clip set and size
+    KEY_BONES = ["Head", "FrontToe.L", "FrontToe.R", "HindToe.L", "HindToe.R", "Tail6"]
+    KEY_FALLBACK = {}
+    LIMB_RE = re.compile(r"(Arm|Forearm|Front|Thigh|Shin|Hind)")
+    STANDING_ENDS = {"Bark": "both", "Attack": "both", "PlayBow": "both", "Jump": "both", "Sit_Start": "start",
+                     "Sit_End": "end", "Lie_Start": "start", "Lie_End": "end", "Death": "start"}
+    TAIL_TIP = "Tail6"
+    SIZE_WINDOW = ((0.75, 1.0), (1.0, 1.4))  # withers 0.66 m (head 0.89 m), 1.18 m nose to hanging tail
+WIDTH_WINDOW = None                           # plausible rest width (x); only the raven's bind pose has a known span
+ROOT_CLIMB = set()                            # clips whose Root may leave the ground plane (still upright)
+TWIST_LIMB_DEG = 15.0                         # default of --twist-limb-deg
+WING_RE, WING_WARN_DEG = None, None           # raven: wing bones get their own per-frame twist WARN level
+GLB_VRAM_WARN_MB = 100.0                      # default of --glb-vram-warn-mb (one 2K body set + the eye)
+if AP.IS_RAVEN:   # the raven rig (tools/raven/): 122 bones, bind pose = standing body with the wings SPREAD
+    # key bones (reported separately in the motion checks): head, middle-toe tips, wing hands, central rectrix
+    KEY_BONES = ["Head", "Toe3b.L", "Toe3b.R", "Hand.L", "Hand.R", "Rect1.L"]
+    KEY_FALLBACK = {}
+    # the tight twist gate: the IK-driven leg chain and toes (an IK roll flip candy-wraps them). The wing is FK (fold
+    # slerps, no IK), its fast own-axis rotations are designed: WING_RE only sets their WARN level; single feather
+    # bones are rigid strips. The twist vs parent (--twist-local-deg 90) still applies to every bone.
+    LIMB_RE = re.compile(r"^(Thigh|Shin|Tarsus|Toe\d[ab])\.")
+    TWIST_LIMB_DEG = 25.0      # default --twist-limb-deg (15 for the others): smooth step twists reach 18 deg/f
+    WING_RE = re.compile(r"^(UpperArm|Forearm|Hand|Alula|Prim\d\d|Sec\d|Tert\d|Cov[UFH]\d)\.")   # Cov*: covert pivots
+    WING_WARN_DEG = 60.0       # the wing folds are FK slerps (no IK, no flip): a fold / unfold in 3 frames is by design
+    # one-shots and loops cross-faded from / to Idle (ground) or from / to Fly / Glide (air) in RavenSetup.cs;
+    # a value is ends ("start" | "end" | "both", vs --boundary-ref = Idle) or a list of (ends, reference clip).
+    # Walk / Walk_IP start in their own double-support phase (tools/raven/clips/ground.py): not checked.
+    STANDING_ENDS = {"Idle_Look": "both", "Caw": "both", "Eat": "both", "Drink": "both", "Hop": "both",
+                     "Hop_IP": "both", "Turn_L90": "both", "Turn_R90": "both", "Attack": "both", "Hit_L": "both",
+                     "Hit_R": "both", "Death_L": "start", "Death_R": "start",
+                     "TakeOff": [("start", "Idle"), ("end", "Fly")], "Land": [("start", "Glide"), ("end", "Idle")],
+                     "Fly_IP": [("both", "Fly")], "Glide": [("both", "Fly")], "Glide_IP": [("both", "Fly")]}
+    # (Glide_Bank_L/R hold their bank through the loop: they are blend-tree children of Glide, never cross-faded)
+    TAIL_TIP = "Tail"                         # pygostyle bone (the rectrices fan from it)
+    # bind pose: bill tip to tail tip 0.567 m horizontal, crown 0.389 m, span 1.08 m (docs/raven_reference.md 1.2)
+    SIZE_WINDOW = ((0.33, 0.45), (0.52, 0.70))
+    WIDTH_WINDOW = (1.00, 1.20)
+    ROOT_CLIMB = {"TakeOff", "Land"}          # Root up 1.3 m / down 1.2 m (tools/raven/clips/flight.py)
+    GLB_VRAM_WARN_MB = 150.0                  # two 2K sets (body + feather atlas: 6 maps, 134 MB) + the 1K eye
 
 
 # ============================================================================================ numpy transform helpers
@@ -724,7 +765,8 @@ def bbox(pts):
 def load_source(a, manifest):
     bpy.ops.wm.open_mainfile(filepath=a.src)
     sc = bpy.context.scene
-    arm = bpy.data.objects.get("CalfRig") or bpy.data.objects.get("CowRig") or find_armature()
+    arm = (bpy.data.objects.get("CalfRig") or bpy.data.objects.get("CowRig") or bpy.data.objects.get(AP.NAME + "Rig")
+           or find_armature())
     lods = [o for o in lod_objects() if any(m.type == "ARMATURE" and m.object == arm for m in o.modifiers) or o.parent == arm]
     S = {"fps": sc.render.fps / sc.render.fps_base, "arm": arm.name}
     S["bones_all"] = [b.name for b in arm.data.bones]
@@ -822,6 +864,7 @@ def check_twist(a, S):
     sec = "anim"
     names = S["bones"]
     limb = np.array([bool(LIMB_RE.search(n)) for n in names])
+    wing = np.array([bool(WING_RE.search(n)) for n in names]) if WING_RE is not None else np.zeros(len(names), bool)
     S["rot_max"] = {}
     for clip, (frames, (pop, local, rot, _)) in S["twist"].items():
         for j, n in enumerate(names):
@@ -836,37 +879,43 @@ def check_twist(a, S):
                 top.append("%s %.1f f%d->%d" % (names[j], pop[i, j], frames[i], frames[i + 1]))
         limb_pop = float(pop[:, limb].max()) if pop.size and limb.any() else 0.0
         any_pop = float(pop.max()) if pop.size else 0.0
+        other_pop = float(pop[:, ~wing].max()) if pop.size and (~wing).any() else 0.0    # = any_pop without WING_RE
+        wing_pop = float(pop[:, wing].max()) if pop.size and wing.any() else 0.0
         jl = int(local.max(0).argmax())
         il = int(local[:, jl].argmax())
         loc = float(local[il, jl])
         fail = limb_pop > a.twist_limb_deg or any_pop > a.twist_fail_deg or loc > a.twist_local_deg
-        status = False if fail else ("WARN" if any_pop > a.twist_warn_deg else True)
+        warn = other_pop > a.twist_warn_deg or (wing.any() and wing_pop > WING_WARN_DEG)
+        status = False if fail else ("WARN" if warn else True)
         check(sec, "%s twist continuity" % clip, status,
               "max per-frame twist about the bone's own axis: legs/hooves %.1f deg (limit %g), all bones %.1f deg "
-              "(warn %g, fail %g); top %s; max twist vs parent %.1f deg (%s f%d, limit %g)" %
-              (limb_pop, a.twist_limb_deg, any_pop, a.twist_warn_deg, a.twist_fail_deg, "; ".join(top) or "-",
-               loc, names[jl], frames[il], a.twist_local_deg))
+              "(warn %g%s, fail %g); top %s; max twist vs parent %.1f deg (%s f%d, limit %g)" %
+              (limb_pop, a.twist_limb_deg, any_pop, a.twist_warn_deg,
+               "; wing bones %.1f deg, warn %g" % (wing_pop, WING_WARN_DEG) if wing.any() else "", a.twist_fail_deg,
+               "; ".join(top) or "-", loc, names[jl], frames[il], a.twist_local_deg))
     # one-shot boundaries: clips that CalfSetup.cs enters from / leaves to the standing Idle with a short cross-fade
     # should start / end on the standing pose (local joint rotations vs Idle f0; Root excluded, it carries the motion)
-    ref = S["twist"].get(a.boundary_ref)
-    if ref is None:
-        return
-    Lref = ref[1][3][0]
-    for clip, ends_want in STANDING_ENDS.items():
+    # (the raven's flight clips list their own reference clip: a value may be [(ends, reference clip), ...])
+    for clip, spec in STANDING_ENDS.items():
         if clip not in S["twist"]:
             continue
-        E = S["twist"][clip][1][3]
-        parts, worst = [], 0.0
-        for k, tag in ((0, "start"), (1, "end")):
-            if ends_want not in (tag, "both"):
+        for ends_want, ref_name in ([(spec, a.boundary_ref)] if isinstance(spec, str) else spec):
+            ref = S["twist"].get(ref_name)
+            if ref is None:
                 continue
-            ang = np_rot_angle(np.einsum("bji,bjk->bik", E[k], Lref))
-            j = int(ang.argmax())
-            worst = max(worst, float(ang[j]))
-            parts.append("%s %.1f deg (%s)" % (tag, ang[j], names[j]))
-        check(sec, "%s boundary vs %s f0" % (clip, a.boundary_ref), "WARN" if worst > a.boundary_warn_deg else True,
-              "%s: max local joint rotation difference %s (warn > %g: the Animator cross-fades this into / out of %s)" %
-              ("start and end" if ends_want == "both" else ends_want, ", ".join(parts), a.boundary_warn_deg, a.boundary_ref))
+            Lref = ref[1][3][0]
+            E = S["twist"][clip][1][3]
+            parts, worst = [], 0.0
+            for k, tag in ((0, "start"), (1, "end")):
+                if ends_want not in (tag, "both"):
+                    continue
+                ang = np_rot_angle(np.einsum("bji,bjk->bik", E[k], Lref))
+                j = int(ang.argmax())
+                worst = max(worst, float(ang[j]))
+                parts.append("%s %.1f deg (%s)" % (tag, ang[j], names[j]))
+            check(sec, "%s boundary vs %s f0" % (clip, ref_name), "WARN" if worst > a.boundary_warn_deg else True,
+                  "%s: max local joint rotation difference %s (warn > %g: the Animator cross-fades this into / out of %s)" %
+                  ("start and end" if ends_want == "both" else ends_want, ", ".join(parts), a.boundary_warn_deg, ref_name))
 
 
 # ============================================================================================ FBX raw checks
@@ -1009,10 +1058,15 @@ def check_fbx_raw(a, S, expect_tex):
         odd = sorted(n for n in set(empty) | {n for n in S["bones"] if n in limbs and n not in
                                                {F.name(c[0]) for c in cl_data} and n not in S["dropped"]}
                      if n != "Root")
-        anim = [n for n in odd if rot.get(n, (0.0,))[0] > 1.0]
+        # a LEAF joint that is weighted on another LOD only lost its geometry to the LOD reduction (the raven's alula
+        # feathers are culled on LOD2): nothing on this LOD should follow it
+        has_child = {p for p in S["parent"].values() if p}
+        culled = [n for n in odd if n in S["weighted"] and n not in has_child]
+        anim = [n for n in odd if rot.get(n, (0.0,))[0] > 1.0 and n not in culled]
         check(sec, "%s unweighted joints" % lname, "WARN" if anim else True,
-              "joints without weights (besides Root): %s%s" % (odd or "none", "; animated: " + ", ".join(
-                  "%s up to %.1f deg (%s f%d)" % (n, rot[n][0], rot[n][1], rot[n][2]) for n in anim) if anim else ""))
+              "joints without weights (besides Root): %s%s%s" % (odd or "none", "; animated: " + ", ".join(
+                  "%s up to %.1f deg (%s f%d)" % (n, rot[n][0], rot[n][1], rot[n][2]) for n in anim) if anim else "",
+                  "; leaf joints weighted on another LOD (geometry culled here): %s" % culled if culled else ""))
         # FBX skin (what Unity computes): v = sum_k w_k * W_bone(t) @ TransformLink^-1 @ Transform @ v_mesh
         if cl_data:
             idx4 = np.zeros((nv, 4), np.int64)
@@ -1119,6 +1173,8 @@ def check_fbx_raw(a, S, expect_tex):
             yaw = np.degrees(np.unwrap(np.arctan2(fwd[:, 0], fwd[:, 2])))
             tilt = np.degrees(np.arccos(np.clip(up[:, 1], -1.0, 1.0)))
             flat = np.abs(pos[:, 1]).max() <= 0.001 and tilt.max() <= 0.05
+            if n in ROOT_CLIMB and tilt.max() <= 0.05:
+                flat = True     # designed vertical root motion (the raven's TakeOff climbs, Land descends)
             check(sec, "take %s root motion" % n, True if flat else "WARN",
                   "Unity space over %d frames: x %+.3f..%+.3f m, z %+.3f..%+.3f m (end %+.3f, %+.3f), height |y| max %.1f mm, "
                   "yaw %+.1f..%+.1f deg (end %+.1f), pitch/roll max %.2f deg%s" %
@@ -1131,13 +1187,13 @@ def check_fbx_raw(a, S, expect_tex):
     def unity(n):
         p = W[limbs[n]].translation * unit
         return Vector((-p.x, p.y, p.z))
-    if "Head" in limbs and "Tail7" in limbs:
-        h, t = unity("Head"), unity("Tail7")
+    if "Head" in limbs and TAIL_TIP in limbs:
+        h, t = unity("Head"), unity(TAIL_TIP)
         lft = [unity(n) for n in limbs if n.endswith(".L") and not n.startswith("PoleTarget")]
         lx = sum(p.x for p in lft) / max(1, len(lft))
         check(sec, "facing (Unity space)", h.z > t.z and h.y > 0.3 and lx < 0,
-              "Head (%.3f, %.3f, %.3f), Tail7 (%.3f, %.3f, %.3f): front = +Z, up = +Y; .L bones mean x %.3f (<0 = calf's left)" %
-              (h.x, h.y, h.z, t.x, t.y, t.z, lx))
+              "Head (%.3f, %.3f, %.3f), %s (%.3f, %.3f, %.3f): front = +Z, up = +Y; .L bones mean x %.3f (<0 = its left)" %
+              (h.x, h.y, h.z, TAIL_TIP, t.x, t.y, t.z, lx))
     # materials + textures
     mats = sorted(F.name(u) for u, n in F.objs.items() if n.name == "Material")
     want_mats = sorted({m for info in S["lods"].values() for m in info["mats"] if m})
@@ -1349,9 +1405,9 @@ def check_fbx_import(a, S, expect_tex):
     rest = bone_samples(arm, S["bones"], S["lengths"], [0])[0]
     e = max(point_err(rest[n], S["rest"][n]) for n in S["bones"] if n in rest)
     check(sec, "rest skeleton vs source", e <= a.tol_mm / 1000, "max error %s (joint heads, bone-axis and off-axis points)" % mm(e))
-    head, tail = rest["Head"][0], rest["Tail7"][0] if "Tail7" in rest else rest[S["bones"][-1]][0]
+    head, tail = rest["Head"][0], rest[TAIL_TIP][0] if TAIL_TIP in rest else rest[S["bones"][-1]][0]
     check(sec, "facing", head[1] < tail[1] and head[2] > 0.3,
-          "Head y=%.3f < Tail7 y=%.3f (Blender -Y front = Unity +Z), Head z=%.3f" % (head[1], tail[1], head[2]))
+          "Head y=%.3f < %s y=%.3f (Blender -Y front = Unity +Z), Head z=%.3f" % (head[1], TAIL_TIP, tail[1], head[2]))
     for n, (lo, hi) in S["actions"].items():
         if n not in acts:
             continue
@@ -1377,8 +1433,9 @@ def check_fbx_import(a, S, expect_tex):
         smn, smx = bbox(S["rest_coords"])
         dim, sdim = mx - mn, smx - smn
         k = AP.FINAL_SCALE      # plausible size window: calf 0.8-1.4 m high, 1.4-2.0 m long; the adult cow x1.42
-        ok = np.abs(mn - smn).max() < 0.002 and np.abs(mx - smx).max() < 0.002 and 0.8 * k < dim[2] < 1.4 * k \
-            and 1.4 * k < dim[1] < 2.0 * k
+        (h0, h1), (l0, l1) = SIZE_WINDOW
+        ok = np.abs(mn - smn).max() < 0.002 and np.abs(mx - smx).max() < 0.002 and h0 * k < dim[2] < h1 * k \
+            and l0 * k < dim[1] < l1 * k and (WIDTH_WINDOW is None or WIDTH_WINDOW[0] * k < dim[0] < WIDTH_WINDOW[1] * k)
         check(sec, "rest dimensions", ok, "L(y) %.3f m, H(z) %.3f m, W(x) %.3f m (source %.3f / %.3f / %.3f), ground z=%.4f" %
               (dim[1], dim[2], dim[0], sdim[1], sdim[2], sdim[0], mn[2]))
         if co.shape == S["rest_coords"].shape:
@@ -1499,11 +1556,11 @@ def check_glb_raw(a, S, expect_tex):
             e = max(e, max(abs(D[r][c] - (1.0 if r == c else 0.0)) for r in range(4) for c in range(4)))
         check(sec, "inverse bind matrices", e < 1e-4, "rest joint matrices max |mesh^-1 @ joint @ IBM - I| = %.1e" % e)
     h = (YUP_TO_BL @ W[jidx["Head"]]).translation if "Head" in jidx else None
-    t = (YUP_TO_BL @ W[jidx["Tail7"]]).translation if "Tail7" in jidx else None
+    t = (YUP_TO_BL @ W[jidx[TAIL_TIP]]).translation if TAIL_TIP in jidx else None
     if h is not None and t is not None:
-        gh, gt = W[jidx["Head"]].translation, W[jidx["Tail7"]].translation
+        gh, gt = W[jidx["Head"]].translation, W[jidx[TAIL_TIP]].translation
         check(sec, "facing (glTF space)", gh.z > gt.z and gh.y > 0.3,
-              "Head z=%.3f > Tail7 z=%.3f: front = glTF +Z (glTF convention), up = +Y" % (gh.z, gt.z))
+              "Head z=%.3f > %s z=%.3f: front = glTF +Z (glTF convention), up = +Y" % (gh.z, TAIL_TIP, gt.z))
     # animations
     anims = {an.get("name"): an for an in J.get("animations", [])}
     check(sec, "animations present", sorted(anims) == sorted(S["actions"]),
@@ -1614,9 +1671,9 @@ def check_glb_import(a, S):
     rest = bone_samples(arm, S["bones"], S["lengths"], [0])[0]
     e = max(point_err(rest[n], S["rest"][n]) for n in S["bones"] if n in rest)
     check(sec, "rest skeleton vs source", e <= a.tol_mm / 1000, "max error %s (joint heads, bone-axis and off-axis points)" % mm(e))
-    if "Head" in rest and "Tail7" in rest:
-        check(sec, "facing", rest["Head"][0][1] < rest["Tail7"][0][1],
-              "Head y=%.3f < Tail7 y=%.3f" % (rest["Head"][0][1], rest["Tail7"][0][1]))
+    if "Head" in rest and TAIL_TIP in rest:
+        check(sec, "facing", rest["Head"][0][1] < rest[TAIL_TIP][0][1],
+              "Head y=%.3f < %s y=%.3f" % (rest["Head"][0][1], TAIL_TIP, rest[TAIL_TIP][0][1]))
     for n, (lo, hi) in S["actions"].items():
         if n not in acts:
             continue
@@ -1759,7 +1816,7 @@ def main(argv):
     ap.add_argument("--tol-mm", type=float, default=1.0)
     ap.add_argument("--samples", type=int, default=0,
                     help="sampled frames per action for the bone checks (plus first/last); 0 = every frame (default)")
-    ap.add_argument("--twist-limb-deg", type=float, default=15.0,
+    ap.add_argument("--twist-limb-deg", type=float, default=TWIST_LIMB_DEG,
                     help="FAIL: max twist of a leg/hoof bone about its own axis between consecutive frames")
     ap.add_argument("--twist-warn-deg", type=float, default=35.0, help="WARN: the same for any bone")
     ap.add_argument("--twist-fail-deg", type=float, default=90.0, help="FAIL: the same for any bone")
@@ -1774,7 +1831,7 @@ def main(argv):
                     help="skinned-vertex deviation from the source above this is a FAIL (broken weights / bones)")
     ap.add_argument("--no-skin-frames", action="store_true",
                     help="skip the every-frame skinned-vertex check (the slowest check, ~1-3 min)")
-    ap.add_argument("--glb-vram-warn-mb", type=float, default=100.0,
+    ap.add_argument("--glb-vram-warn-mb", type=float, default=GLB_VRAM_WARN_MB,
                     help="WARN when the GLB's embedded images decode to more than this (RGBA8 + mips)")
     ap.add_argument("--json", default=None)
     ap.add_argument("--render-dir", default=None, help="also render source / FBX / GLB contact sheets here")

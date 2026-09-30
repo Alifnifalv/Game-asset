@@ -64,6 +64,8 @@ What the tool does to the in-memory copy before exporting
   * Material slots: M_Calf_Body is moved to the LAST slot of every LOD (source order: body, eye), so it is the last
     submesh in Unity: Unity/Calf/Fur/CalfFur.cs appends shell-fur materials, which Unity draws on the last submesh.
     Materials are remapped by name, so nothing else depends on the order (--keep-slot-order to disable).
+    The raven has three (M_Raven_Body, M_Raven_Feather, M_Raven_Eye -> exported Feather, Eye, Body); the feather
+    material's BaseColor alpha -> Math ROUND -> Principled Alpha network becomes glTF alphaMode MASK (cutoff 0.5).
   * Materials: images already used by the materials are re-pointed at the copies in <out>/Textures/.  If the
     materials have no image textures (stage B input) and --tex-dir holds the calf_textures.py outputs, a Principled
     network is wired from them (BaseColor, Normal, Roughness, AO -> glTF occlusion; eye BaseColor).
@@ -634,12 +636,15 @@ def prepare(a, blend):
         weight_stats[o.name] = limit_weights(o, arm, dset, a.max_influences, fit)
         weight_stats[o.name]["ngons_triangulated"] = triangulate_ngons(o)
     setup_nla(arm, actions)
-    # material slots (0 body, 1 eye by convention; fall back to names)
+    # material slots (0 body, 1 eye by convention; fall back to names).  The raven has a third material between them
+    # (slots: 0 M_Raven_Body, 1 M_Raven_Feather, 2 M_Raven_Eye): a "feather" name gets its own key, so the eye is still
+    # found by name and every material's images are retargeted; no calf/cow/dog material name contains "feather".
     mats = {}
     for o in lods:
         for i, s in enumerate(o.material_slots):
             if s.material:
-                key = "eye" if ("eye" in s.material.name.lower() or i == 1) else "body"
+                nm = s.material.name.lower()
+                key = "eye" if "eye" in nm else ("feather" if "feather" in nm else ("eye" if i == 1 else "body"))
                 mats.setdefault(key, s.material)
     if not a.keep_slot_order and mats.get("body"):
         for o in lods:

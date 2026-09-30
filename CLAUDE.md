@@ -1,4 +1,4 @@
-# Game-asset: Young Cow (Calf) and Adult Cow for Unity
+# Game-asset: Young Cow (Calf), Adult Cow, Rottweiler and Raven for Unity
 
 **Read this first, then `docs/WORKLOG.md` (current status, open issues, chronological log) and `docs/PLAN.md` (scope and phases).**
 `docs/REFERENCES.md` describes the look target, and `docs/anim_lying.md` is the handoff for the lying clips.
@@ -14,6 +14,18 @@ GiM adult female in `videoplayback.mp4` (a Simmental: red-pied, white head, shor
 tools with `ASSET=cow` (`bash tools/build_all.sh --asset cow`); see "Adult cow" below. The calf stays the default: every
 tool behaves exactly as before without `ASSET`.
 
+**Rottweiler (male) (third asset, `Unity/Rottweiler`):** the user asked for the male Rottweiler next ("now Rottweiler
+(male)"), with references in `Rottweiler (male)/` (GiM *Animalia - Rottweiler* stills and `videoplayback (4).mp4`) and a
+sample asset in `Rottweiler (male)/Dog/`. The sample (870 tris, 38-bone Rigify metarig, 9 clips) is far below the target,
+so the dog has its **own pipeline in `tools/dog/`** (procedural SDF anatomy -> mesh, rig, textures, clips) and shares only
+the exporter and validator: `bash tools/build_all.sh --asset dog`. See "Rottweiler" below.
+
+**Raven (fourth asset, `Unity/Raven`):** the user asked for the raven next ("now raven assts in ravan folder"), with
+references in `ravan/` (GiM *Animalia - Raven* stills, `videoplayback (6).mp4`) and a sample `ravan/Raven.glb` / `.blend`
+(2.6k tris, a 48-bone metarig, no weights, no clips: far below the target). The raven has its **own pipeline in
+`tools/raven/`** (SDF body + explicit feather strips on per-feather bones) and shares only the exporter and validator:
+`bash tools/build_all.sh --asset raven`. The measured look spec is `docs/raven_reference.md`. See "Raven" below.
+
 ## Repo layout
 | Path | What |
 |---|---|
@@ -25,6 +37,10 @@ tool behaves exactly as before without `ASSET`.
 | `build/` | **gitignored** intermediates (`stage_a..d.blend`, `textures/`, `logs/`, test outputs); regenerate with the tools |
 | `tools/asset_profile.py` | Which animal a run builds (`ASSET=calf` default, `ASSET=cow`): build dir, output dir, texture prefix, final scale. |
 | `build/cow/`, `Unity/Cow/` | The adult cow's intermediates (gitignored) and deliverables (git-tracked: FBX, GLB, `Textures/`, `Editor/CowSetup.cs`, README). |
+| `Rottweiler (male)/` | Rottweiler references (GiM stills `*.webp`, preview `videoplayback (4).mp4`) and the sample `Dog/` (DogGlb.glb, DogFBX.fbx, Dogs1.blend, BlackDog.png). Read-only. |
+| `tools/dog/` | The Rottweiler pipeline (stages A-D, `clips/` families, `dog_views.py`); `build/dog/` its intermediates (gitignored), `Unity/Rottweiler/` its deliverables (git-tracked). |
+| `ravan/` | Raven references (GiM stills `*.webp`, preview `videoplayback (6).mp4`) and the sample `Raven.glb` / `Raven.blend`. Read-only. |
+| `tools/raven/` | The raven pipeline (stages A-D, `clips/` families, `raven_views.py`); `build/raven/` its intermediates (gitignored), `Unity/Raven/` its deliverables (git-tracked). |
 | `Unity/Calf/` | Deliverables for Unity (FBX, GLB, textures, `Editor/CalfSetup.cs`, `Fur/`, README with import settings). **Git-tracked**, and rewritten by every full build. |
 | `docs/` | `WORKLOG.md` (status, open issues, log), `PLAN.md` (scope/phases), `REFERENCES.md` (reference files, video timestamp index, the user's close-up spec), `anim_lying.md` (lying family handoff) |
 
@@ -32,6 +48,8 @@ tool behaves exactly as before without `ASSET`.
 ```bash
 pip install bpy                       # Blender 5.0.1 as a Python module (no blender binary; download.blender.org is blocked)
 pip install "numpy<2" pillow "opencv-python-headless<4.11" imageio imageio-ffmpeg trimesh   # bpy pins numpy 1.26
+pip install scikit-image pymeshlab xatlas   # the Rottweiler's mesh stage (marching cubes, decimation, UV atlas)
+apt-get install -y libopengl0               # pymeshlab's meshing filters need libOpenGL.so.0 (else "filter not found")
 ```
 - Run scripts with `python3 tools/<script>.py` (they `import bpy`). Only Cycles on the CPU works (no GPU, no EEVEE).
 - There are 4 shared cores: keep test renders **≤480 px at ≤12 samples**. `render_views.py` defaults to 24 samples, so
@@ -82,7 +100,8 @@ Check tools:
 - `tools/rebake_leg_ik.py`: re-solve leg IK for imported clips.
 
 ### Do not
-- **Do not point experiments at `Unity/Calf/`, `Unity/Cow/` or `build/` (incl. `build/cow/`).** `build_all.sh` and `export_unity.py --out-dir Unity/Calf`
+- **Do not point experiments at `Unity/Calf/`, `Unity/Cow/`, `Unity/Rottweiler/`, `Unity/Raven/` or `build/` (incl.
+  `build/cow/`, `build/dog/`, `build/raven/`).** `build_all.sh` and `export_unity.py --out-dir Unity/Calf`
   overwrite the committed deliverable, and `build/logs/` is the record of the last full build (a manual validator run
   after the build once left `validate.log` at 172 PASS while `build_all.log` said 175). Give re-exports and validator
   runs a scratch `--out-dir` / `--json` / `--render-dir`. If you did overwrite them, re-run the full build before
@@ -128,6 +147,115 @@ runs the same steps with `ASSET=cow` on `build/cow/` and writes `Unity/Cow/`. Wh
   5.0 mm, Death_Lying REACH 6.6 mm (the calf's are <= 0).
 - **Gate for the cow:** as below, with `build/cow/logs/`; final-review build: see `docs/WORKLOG.md` (validator 266
   checks: the calf's 267 minus the shell-fur texture check).
+
+### Rottweiler (`ASSET=dog`, `tools/dog/`)
+`bash tools/build_all.sh --asset dog` (about 8 min; logs in `build/dog/logs/`, run output `build/dog/logs/build_all_run.out`)
+writes `Unity/Rottweiler/`. Its own stages, then the shared `export_unity.py` / `validate_export.py`:
+```bash
+python3 tools/dog/dog_stage_a.py      # anatomy.py SDF (2 mm grid) -> marching cubes -> pymeshlab decimation; parts (draped ears,
+                                      # eyeballs, claws, teeth, tongue); xatlas UV atlas; LOD1/2 decimated WITH UVs; skin weights
+                                      # from the primitives' bones -> build/dog/stage_a.npz   (~90 s)
+python3 tools/dog/dog_stage_b.py      # Blender: RottweilerRig (43 bones, unconnected) + Rottweiler_LOD0/1/2 -> stage_b.blend
+python3 tools/dog/dog_textures.py --res 4096   # numpy atlas rasteriser + 3D-painted coat/markings, fur normal, SDF AO -> stage_c
+python3 tools/dog/dog_animations.py   # every tools/dog/clips/*.py family, QA GATE (exit 1) -> stage_d.blend
+```
+- **Anatomy** (`anatomy.py`): joints `J` (meters, faces -Y, withers 0.66 m, authored at final size: no scale stage) and the
+  SDF primitives, each tagged with its bone(s); the skin weights come from those tags (soft-min of the primitive distances,
+  chains split along their bones), the lip line is split hard between Head and Jaw (`lip_z`). Change the shape there, then
+  rebuild. **Head design frame:** every head primitive, the head joints, eyes, ears, teeth and tongue are authored in design
+  coordinates and placed by `H(p) = HEAD_POS + HEAD_SCALE * RH @ (p - ATLAS0)` (`HEAD_POS` = the atlas = the head carriage,
+  `HEAD_PITCH` + = nose down, `HEAD_SCALE` 1.05); `H_inv` maps back (stage A lip split, the texture's head markings). Poses
+  that set the neck/head explicitly carry the carriage compensation Neck1 -6, Neck2 -4 (`clips/_common.py`).
+  `sdf_preview.py` (5 s) + `dog_views.py` (clay contact sheet: side/front/back/top/3-4/head/paw) for shape work.
+  **Likeness:** `dog_compare.py <stage_d.blend> <out>` renders GiM reference | ours pairs (14 presets: video frames and
+  stills; fair lighting) and `preview.sh <scratch>` runs A-D with 1K textures plus the comparisons (~4 min). One likeness
+  round was done (checkpoint 05; the user asked for one round only).
+- **Face attribute `part`**: 0 coat, 1 mouth interior / eye socket (cut surfaces), 2 claw, 3 nose leather, 4 eyeball,
+  5 paw pad, 6 tooth, 7 tongue, 8 ear. Materials `[0] M_Rottweiler_Body`, `[1] M_Rottweiler_Eye`.
+- **Rig**: `Root` > `Hips` > `Spine1-3` > `Neck1-2` > `Head` > `Nose`, `Jaw` > `Tongue1-3`, `Ear1/2.X`, `Eye.X`;
+  `Hips` > `Tail1-6`, `Thigh.X` > `Shin.X` > `HindFoot.X` > `HindToe.X`; `Spine3` > `Scapula.X` > `UpperArm.X` >
+  `Forearm.X` > `FrontFoot.X` > `FrontToe.X`. Rolls: local X ~ -X world (flexion = rotation about local X).
+  **Bones are never connected**: `export_unity.py`'s rig axis bake transforms edit bones one by one and a connected child
+  drags its parent's tail twice (the first dog export was 1.37 m off).
+- **Animation** (`dog_anim.py`): `Pose` -> analytic IK straight to FK keys (no constraints). Legs: `LegPose(mcp, pastern,
+  toe, scap, pole, local)` in the root frame; the scapula swings with the leg (gain 0.75, clamped +-35 deg) and glides up to
+  4 cm (no collarbone); 2-bone chain in the plane of the rest bend; the pastern/metatarsus is a hinge in that plane;
+  `reach_pass` lowers the body where a paw is out of reach (reported as "body drop"); leg planes are kept continuous frame
+  to frame. `Pose()` = rest (self-test 1e-6). Signs: `rot(pitch, yaw, roll)` pitch + = tip down (forward bone) / back-up
+  (hanging bone), yaw + = to the dog's left; `pastern` + = the lower end swings back (carpus flexion; for the HOCK flexion is
+  **negative**: the paw swings forward); `toe` + = tip down; `jaw` + = open (`local["Jaw"] = rot(P.jaw)`); `ears` pitch
+  + = ears back, applied as a swing back and out (yaw + roll, mirrored) so the folded flap never enters the skull; `local` 0..1 = paw angles in the ground or
+  the body frame (a body rolled onto its side). `_common.timeline` blends key poses and lifts stepping paws.
+- **Fast QA** (5-10 s): `ASSET=dog python3 tools/dog/dog_animations.py --in build/dog/stage_c.blend --out <scratch>/d.blend
+  [--only locomotion,idles,sit_lie,actions]`; each family also runs standalone: `python3 tools/dog/clips/<family>.py --in
+  build/dog/stage_b.blend --out-dir <scratch>`. Filmstrips: `python3 tools/render_clip.py <blend> <clip> <out> --rig
+  RottweilerRig`.
+- **Dog QA gate** (`dog_animations.py`): IK gap <= 0.1 mm, planted slide <= 0.1 mm (`_RM` gaits, idles, Jump stances),
+  loop seam <= 0.01 mm, elbow/stifle/hock never bend backward (> 0.5 deg), carpus dorsiflexion <= 65 deg, leg-bone twist
+  <= 12 deg per frame (the validator FAILs 15), LOD2 body and paws >= -2 cm.
+- The validator reads the dog's key bones / limb regex / clip boundaries / size window from `AP.IS_DOG`
+  (`validate_export.py`, after `STANDING_ENDS`).
+- **Gate for the dog:** as below, with `build/dog/logs/` and the dog QA gate. Likeness build (checkpoint 05, about 6.5 min:
+  textures 201 s): `QA GATE: pass (25 clips)`, validator **264 PASS / 0 FAIL / 0 WARN**, `T_Rottweiler_BaseColor` 4096,
+  LODs 46,848 / 10,992 / 3,106 tris. Stage B stops on a degenerate MikkTSpace tangent (a UV fold in a decimated LOD; stage
+  A decimates LOD2 from LOD1 and repairs folds). Known values: body drop Walk 0, Trot 9.8 mm, Gallop 66.8 mm (OI-51); leg
+  twist max 10.9 deg/f (Death); Death LOD2 paws -1.77 cm (close to the -2 cm gate).
+
+### Raven (`ASSET=raven`, `tools/raven/`)
+`bash tools/build_all.sh --asset raven` (about 7 min: stage A 56 s, textures 173 s, validator 113 s; logs in
+`build/raven/logs/`, run output `build/raven/logs/build_all_run.out`) writes `Unity/Raven/`:
+```bash
+python3 tools/raven/raven_stage_a.py     # SDF body (raven_anatomy) -> mesh 14.6k tris + lofted bill (upper/lower mandible,
+                                         # explicit meshes) + claws + eyes + every feather strip (plumage.plumage());
+                                         # xatlas for the body; weights; LOD1/2 (body decimated, feathers regenerated)
+python3 tools/raven/raven_stage_b.py     # RavenRig (122 bones, unconnected) + Raven_LOD0/1/2 -> stage_b.blend
+python3 tools/raven/raven_textures.py --res 4096   # body atlas + feather atlas (RGBA: A = cutout) + eye -> stage_c
+python3 tools/raven/raven_animations.py  # every tools/raven/clips/*.py family (ground, actions, flight), QA GATE -> stage_d
+```
+- **Anatomy** (`raven_anatomy.py`): meters, faces -Y, bill tip to tail tip 0.62 m, crown 0.389 m, span 1.08 m (the spec's
+  master table). **Bind pose = the standing body with the wings SPREAD** (the glide planform, in the wing plane `U_WING` /
+  `N_WING`, 32 deg down-back); `raven_anim.stand()` folds them, so `Pose()` is NOT the idle pose. The body is SDF prims
+  with bone tags (tools/dog/sdf.py); the bill is two lofted meshes (`bill_mesh('upper'|'lower')`, MeshSDF stand-ins so
+  `eval_prims` still sees it); `COVERT_GROUPS` places the covert pivot bones.
+- **Feathers** (`feathers.py`, `plumage.py`): every remex (P1-P10, S1-S6, T1-T3), rectrix (R1-R6), covert row (marginal,
+  lesser, median, greater, primary, underwing), alula, scapular, upper tail covert, throat hackle, nasal bristle and
+  trouser feather is a closed thin strip (top + bottom sheet, parametric UVs in a slot of the feather atlas
+  `plumage.SLOTS`; '_u' slots = undersides). Flight feathers and rectrices are rigid on their own bone; coverts are
+  rooted at their remex's base or skinned to the covert pivots `Cov{U,F,H}1-4.X` (`Feather.skin`); dorsal stacking:
+  proximal over distal (T3 on top ... P10 lowest), `LAYER_STEP` 1 mm.
+- **Materials / parts:** `[0] M_Raven_Body`, `[1] M_Raven_Feather` (Cutout: BaseColor alpha; glTF alphaMode MASK),
+  `[2] M_Raven_Eye`. Face `part`: 0 plumage skin, 1 mouth interior, 2 bill, 3 bare leg / toe skin, 4 claw, 5 eyeball,
+  6 feather, 7 feather underside.
+- **Rig (122 bones):** `Root` > `Hips` > `Spine1-2` > `Neck1-3` > `Head` > `Jaw`, `Throat` (hackle puff), `Eye.X`,
+  `Lid.X` (placeholders); `Spine2` > `Shoulder.X` > `UpperArm.X` > `Forearm.X` > `Hand.X` (> `Alula.X`, `Prim01-10.X`),
+  `Forearm.X` > `Sec1-6.X`, `UpperArm.X` > `Tert1-3.X`, the covert pivots `CovU/F/H1-4.X`; `Hips` > `TailBase` > `Tail` >
+  `Rect1-6.X`; `Hips` > `Thigh.X` > `Shin.X` > `Tarsus.X` > `Toe1-4a/b.X`. Wing and feather bones: local Z = the dorsal
+  wing normal (the fan fold is a local-Z rotation); others as the dog (local X ~ -X world). Never connected.
+- **Animation** (`raven_anim.py`): `Pose` -> analytic FK/IK straight to keys. `WingPose(fold, arm, elbow, wrist,
+  feathers, elev, sweep, twist, spread, slot, finger_up, hand_twist)`: the fold is a slerp of each wing / feather bone's
+  local rotation toward precomputed fold targets (`FOLD_*`: humerus back along the flank, forearm forward, hand back;
+  feathers parallel, stack order kept by the lateral offsets `FOLD_LAT`); flapping adds shoulder elevation / sweep /
+  twist, primary spread and slotting. `LegPose(mtp, yaw, grip, thigh, pole, local)`: 2-bone IK (Shin + Tarsus) from a
+  femur held on the Hips, the toes world-anchored (grip 0 flat .. 1 curled; `local` 1 = carried by the tarsus, for the
+  dead / lying legs; blend it slowly: a body roll becomes toe twist). Signs (checked by renders): jaw + = opens, elev + =
+  wing up, sweep + = forward, body_rot pitch + = nose down, `look()` pitch + = bill down / yaw + = left, TailBase / Tail
+  pitch + = tail up. `fly_neutral()`: body pitched 28 deg (spine level), legs tucked, tail fan `FLY_TAIL_SPREAD` 0.8.
+- **Clips (24):** ground.py Idle, Idle_Look, Caw, Eat, Drink, Walk, Walk_IP, Hop, Hop_IP, Turn_L90, Turn_R90;
+  actions.py Attack, Hit_L, Hit_R, Death_L, Death_R; flight.py TakeOff, Fly, Fly_IP, Glide, Glide_IP, Glide_Bank_L,
+  Glide_Bank_R, Land (GiM timings, spec 6.3; flap 20 f; `_IP` = in-place twins; the others move the Root).
+- **Fast QA:** `ASSET=raven python3 tools/raven/raven_animations.py --in build/raven/stage_c.blend --out <scratch>/d.blend
+  [--only ground,actions,flight]`; each family also runs standalone (`python3 tools/raven/clips/<family>.py --in
+  <stage_b.blend> --out-dir <scratch>`). Shape work: `raven_preview.py` + `raven_views.py` (clay or `--textured` contact
+  sheets, `--action/--frame`, `--cmp88` = silhouette overlay on the GiM side still at its measured scale).
+- **Raven QA gate** (`raven_animations.py`, exit 1): rest self-test <= 1e-5, IK gap <= 0.1 mm, planted slide <= 0.1 mm,
+  loop seam <= 0.01 mm, clip boundaries vs `stand()` (ground) or `fly_neutral()` (flight) <= 0.01 mm unless the family's
+  `QA_EXTRA` says otherwise (Walk starts in its own double support; Death: start only; TakeOff / Land: one end each).
+- The validator reads the raven's key bones, leg-twist regex (25 deg/f), wing-twist WARN level (60 deg/f), clip
+  boundaries (per-clip reference: Idle, Fly), size and span windows and the Root climb (TakeOff / Land) from `AP.IS_RAVEN`.
+- **Gate for the raven:** as below, with `build/raven/logs/`. First build (checkpoint 06): `QA GATE: pass (24 clips)`,
+  validator **268 PASS / 0 FAIL / 0 WARN**, `T_Raven_BaseColor` 4096, LODs 43,580 / 11,778 / 3,286 tris (LOD2 varies
+  by a few hundred between runs: the body decimation retries on UV folds). Known values: Death Shin twist 24.6 deg/f
+  (limit 25: no margin), wing bones <= 48.4 deg/f, twist vs parent <= 81.7 deg (limit 90).
 
 ## Verification gate
 A state is **verified-good** (and may become a checkpoint) when:
@@ -249,7 +377,8 @@ python3 tools/validate_export.py --fbx <scratch>/Calf/Calf.fbx --glb <scratch>/C
 - Keep the tools deterministic and parameterised (`--in`/`--out`), because each stage is re-run when an earlier stage changes.
 - After each milestone, update the "Current status" and "Open issues" tables in `docs/WORKLOG.md`, append a log entry
   (what changed, why, verification numbers, next steps) and commit.
-- Development branch: `claude/zealous-cray-le9agd` (the calf's history came from `claude/peaceful-lamport-fk2lw7`, merged in PR #1).
+- Development branch: `claude/zealous-cray-le9agd` (the calf's history came from `claude/peaceful-lamport-fk2lw7`, merged in PR #1;
+  the cow in PR #2).
 - **Safe checkpoints (user rule):** whenever the repo reaches a verified-good state (see "Verification gate"), make a
   commit whose message starts with `CHECKPOINT NN: <short name>` and **push it**. Add a row to the "Checkpoints" table in
   `docs/WORKLOG.md`. (This environment's git proxy only allows pushing the working branch, so pushed tags are rejected
